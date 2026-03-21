@@ -18,14 +18,13 @@ from grunt_cli.helpers import console, get_site_dir
 def init() -> None:
     """Ініціалізує Grunt-сайт: міграції БД, створення адміна."""
     site_dir = get_site_dir()
-    grunt_dir = site_dir / "grunt"
-
-    if not (site_dir / "grunt.site").exists():
+    if site_dir is None or not (site_dir / "grunt.site").exists():
         console.print(
             "[red]✗[/red] grunt.site не знайдено. "
             "Спочатку запусти [cyan]grunt install <назва>[/cyan]"
         )
         raise SystemExit(1)
+    grunt_dir = site_dir / "grunt"
 
     # 1. Генерація SECRET_KEY
     env_file = site_dir / ".env"
