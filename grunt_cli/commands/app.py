@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import json
 import subprocess
-from pathlib import Path
 
 import click
 import httpx
 from rich import box
 from rich.table import Table
 
-from grunt_cli.helpers import DEFAULT_API, auth_headers, console, get_site_dir
+from grunt_cli.helpers import DEFAULT_API, auth_headers, console, get_apps_dir, get_site_dir, resolve_site_api
 
 
 @click.group()
@@ -24,8 +23,7 @@ def app() -> None:
 @click.option("--title", default=None, help="Назва додатку")
 def app_create(name: str, title: str | None) -> None:
     """Створити структуру нового Grunt-додатку."""
-    site_dir = get_site_dir()
-    apps_dir = site_dir / "apps"
+    apps_dir = get_apps_dir()
     app_dir = apps_dir / name
 
     if app_dir.exists():
@@ -57,9 +55,8 @@ def app_create(name: str, title: str | None) -> None:
 @click.option("--branch", default=None, help="Гілка для клонування")
 def app_get(repo_url: str, branch: str | None) -> None:
     """Завантажити додаток з git-репозиторію."""
-    site_dir = get_site_dir()
-    apps_dir = site_dir / "apps"
-    apps_dir.mkdir(exist_ok=True)
+    apps_dir = get_apps_dir()
+    apps_dir.mkdir(parents=True, exist_ok=True)
 
     cmd = ["git", "clone", "--depth", "1"]
     if branch:
@@ -72,17 +69,34 @@ def app_get(repo_url: str, branch: str | None) -> None:
         console.print("[red]✗[/red] Не вдалося клонувати репозиторій")
         raise SystemExit(1)
 
-    console.print("[green]✓[/green] Додаток завантажено")
-    console.print(f"  Тепер встанови його: [cyan]grunt app install <назва>[/cyan]")
+    # Визначаємо назву завантаженого додатку (остання частина URL без .git)
+    app_name = repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
+    console.print(f"[green]✓[/green] Додаток [bold]{app_name}[/bold] завантажено до {apps_dir / app_name}")
+    console.print(f"  Тепер встанови його: [cyan]grunt app install {app_name} --site localhost[/cyan]")
 
 
 @app.command("install")
 @click.argument("name")
-@click.option("--api", default=DEFAULT_API, show_default=True)
-def app_install(name: str, api: str) -> None:
-    """Встановити додаток із директорії apps/."""
-    site_dir = get_site_dir()
-    app_path = site_dir / "apps" / name / "app.json"
+@click.option("--site", default=None, help="Сайт для встановлення (hostname або URL)", metavar="SITE")
+@click.option("--api", default=None, hidden=True, help="API URL (застарілий, використовуй --site)")
+def app_install(name: str, site: str | None, api: str | None) -> None:
+    """Встановити додаток на сайт.
+
+    \b
+    Приклади:
+      grunt app install grunt --site localhost
+      grunt app install my-app --site dev.itmlt.win
+    """
+    # Визначаємо API URL: --site має пріоритет над --api, fallback до DEFAULT_API
+    if site is not None:
+        base_api = resolve_site_api(site)
+    elif api is not None:
+        base_api = api.rstrip("/")
+    else:
+        base_api = DEFAULT_API
+
+    apps_dir = get_apps_dir()
+    app_path = apps_dir / name / "app.json"
 
     if not app_path.exists():
         console.print(f"[red]✗[/red] Файл app.json не знайдено: {app_path}")
@@ -93,7 +107,7 @@ def app_install(name: str, api: str) -> None:
 
     try:
         resp = httpx.post(
-            f"{api}/api/v1/apps/",
+            f"{base_api}/api/v1/apps/",
             headers=auth_headers(),
             json=app_data,
             timeout=10.0,
@@ -103,20 +117,22 @@ def app_install(name: str, api: str) -> None:
             return
         resp.raise_for_status()
     except httpx.ConnectError:
-        console.print(f"[red]✗[/red] Не можу підключитись до {api}")
+        console.print(f"[red]✗[/red] Не можу підключитись до {base_api}")
         raise SystemExit(1)
 
-    # Оновлюємо grunt.site
-    site_file = site_dir / "grunt.site"
-    if site_file.exists():
-        site_config = json.loads(site_file.read_text())
-        installed = site_config.get("installed_apps", [])
-        if name not in installed:
-            installed.append(name)
-            site_config["installed_apps"] = installed
-            site_file.write_text(json.dumps(site_config, ensure_ascii=False, indent=2))
+    # Оновлюємо grunt.site тільки якщо він існує
+    site_dir = get_site_dir()
+    if site_dir is not None:
+        site_file = site_dir / "grunt.site"
+        if site_file.exists():
+            site_config = json.loads(site_file.read_text())
+            installed = site_config.get("installed_apps", [])
+            if name not in installed:
+                installed.append(name)
+                site_config["installed_apps"] = installed
+                site_file.write_text(json.dumps(site_config, ensure_ascii=False, indent=2))
 
-    console.print(f"[green]✓[/green] Додаток [bold]{name}[/bold] встановлено")
+    console.print(f"[green]✓[/green] Додаток [bold]{name}[/bold] встановлено на {base_api}")
 
 
 @app.command("list")
@@ -161,8 +177,6 @@ def app_list(api: str) -> None:
 @click.option("--api", default=DEFAULT_API, show_default=True)
 def app_export(name: str, api: str) -> None:
     """Експортувати DocTypes додатку у JSON-файли."""
-    site_dir = get_site_dir()
-
     try:
         resp = httpx.get(
             f"{api}/api/v1/meta/doctypes",
@@ -175,7 +189,7 @@ def app_export(name: str, api: str) -> None:
         console.print(f"[red]✗[/red] Не можу підключитись до {api}")
         raise SystemExit(1)
 
-    out_dir = site_dir / "apps" / name / "doctypes"
+    out_dir = get_apps_dir() / name / "doctypes"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     exported = 0

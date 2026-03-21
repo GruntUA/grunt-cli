@@ -28,6 +28,9 @@ def serve(
 ) -> None:
     """Запускає dev сервери (backend + frontend)."""
     site_dir = get_site_dir()
+    if site_dir is None:
+        console.print("[red]✗[/red] grunt.site не знайдено. Перейди у директорію Grunt-проекту.")
+        raise SystemExit(1)
     grunt_dir = site_dir / "grunt"
 
     if not grunt_dir.exists():

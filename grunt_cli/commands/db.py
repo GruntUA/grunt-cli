@@ -16,7 +16,12 @@ def db() -> None:
 
 
 def _backend_dir():
-    return get_site_dir() / "grunt" / "backend"
+    from grunt_cli.helpers import console
+    site_dir = get_site_dir()
+    if site_dir is None:
+        console.print("[red]✗[/red] grunt.site не знайдено. Перейди у директорію Grunt-проекту.")
+        raise SystemExit(1)
+    return site_dir / "grunt" / "backend"
 
 
 @db.command("migrate")

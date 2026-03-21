@@ -11,14 +11,46 @@ console = Console()
 GRUNT_REPO_URL = "https://github.com/GruntUA/Grunt.git"
 DEFAULT_API = "http://localhost:8000"
 
+_LOCAL_HOSTS = {"localhost", "127.0.0.1"}
 
-def get_site_dir() -> Path:
-    """Повертає директорію поточного Grunt-сайту (шукає вгору до grunt.site)."""
+
+def get_site_dir() -> Path | None:
+    """Повертає директорію поточного Grunt-сайту або None якщо не знайдено."""
     cwd = Path.cwd()
     for parent in [cwd, *cwd.parents]:
         if (parent / "grunt.site").exists():
             return parent
-    return cwd
+    return None
+
+
+def get_apps_dir() -> Path:
+    """Повертає директорію додатків: локальну apps/ або глобальний ~/.grunt/apps/."""
+    site_dir = get_site_dir()
+    if site_dir is not None:
+        return site_dir / "apps"
+    global_dir = Path.home() / ".grunt" / "apps"
+    global_dir.mkdir(parents=True, exist_ok=True)
+    return global_dir
+
+
+def resolve_site_api(site: str) -> str:
+    """Перетворює ідентифікатор сайту на базовий API URL.
+
+    Приклади:
+        localhost          → http://localhost:8000
+        localhost:9000     → http://localhost:9000
+        dev.itmlt.win      → https://dev.itmlt.win
+        http://myhost:8080 → http://myhost:8080
+    """
+    if "://" in site:
+        return site.rstrip("/")
+
+    host = site.split(":")[0]
+    if host in _LOCAL_HOSTS:
+        port = site.split(":")[1] if ":" in site else "8000"
+        return f"http://localhost:{port}"
+
+    return f"https://{site.rstrip('/')}"
 
 
 def token_file() -> Path:
