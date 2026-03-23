@@ -44,6 +44,39 @@ def auth_login(api: str) -> None:
         console.print(f"[red]✗[/red] Сервер {api} недоступний. Запусти [cyan]grunt serve[/cyan]")
 
 
+@auth.command("register")
+@click.option("--api", default=DEFAULT_API, show_default=True)
+def auth_register(api: str) -> None:
+    """Реєструє нового користувача на сервері."""
+    email = click.prompt("Email", default="admin@grunt.local")
+    password = click.prompt("Пароль", hide_input=True, confirmation_prompt=True)
+    full_name = click.prompt("Повне ім'я", default="Адміністратор")
+
+    try:
+        resp = httpx.post(
+            f"{api}/api/v1/auth/register",
+            json={"email": email, "password": password, "full_name": full_name},
+            timeout=5.0,
+        )
+        if resp.status_code in (200, 201):
+            console.print(f"[green]✓[/green] Користувач {email} створений")
+            # Автоматично логінимось
+            token_resp = httpx.post(
+                f"{api}/api/v1/auth/token",
+                data={"username": email, "password": password},
+                timeout=5.0,
+            )
+            if token_resp.status_code == 200:
+                save_token(token_resp.json()["access_token"])
+                console.print("[green]✓[/green] Автоматично авторизовано")
+        elif resp.status_code == 409:
+            console.print(f"[yellow]~[/yellow] Користувач {email} вже існує")
+        else:
+            console.print(f"[red]✗[/red] Помилка: {resp.text}")
+    except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout):
+        console.print(f"[red]✗[/red] Сервер {api} недоступний. Запусти [cyan]grunt serve[/cyan]")
+
+
 @auth.command("logout")
 def auth_logout() -> None:
     """Видаляє збережений токен."""

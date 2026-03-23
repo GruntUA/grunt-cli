@@ -4,11 +4,39 @@ Command-line interface for managing [Grunt Framework](https://github.com/GruntUA
 
 ## Installation
 
+### Quick install (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/GruntUA/grunt-cli/master/install.sh | bash
+```
+
+The script will:
+- Check for Python 3.12+ and Git
+- Clone the repository to `~/.grunt-cli`
+- Create a virtual environment and install dependencies
+- Add `grunt` symlink to `~/.local/bin`
+
+You can set a custom install path via `GRUNT_CLI_DIR`:
+
+```bash
+GRUNT_CLI_DIR=~/my-path curl -fsSL https://raw.githubusercontent.com/GruntUA/grunt-cli/master/install.sh | bash
+```
+
+### Via pip
+
 ```bash
 pip install grunt-cli
 ```
 
-Verify:
+### From source
+
+```bash
+git clone https://github.com/GruntUA/grunt-cli.git
+cd grunt-cli
+pip install -e .
+```
+
+### Verify
 
 ```bash
 grunt --version
@@ -196,8 +224,9 @@ A Grunt project created with `grunt install`:
 
 ```
 my-site/
-├── grunt/          ← Grunt framework (cloned from GitHub)
-├── apps/           ← Installed applications
+├── apps/
+│   ├── grunt/      ← Grunt framework (cloned from GitHub)
+│   └── my-app/     ← Custom applications
 ├── grunt.site      ← Site configuration marker
 └── .env            ← Environment variables (DB, SECRET_KEY, etc.)
 ```

@@ -35,23 +35,6 @@ def get_site_dir() -> Path | None:
     return None
 
 
-def get_bench_dir() -> Path | None:
-    """Повертає кореневу директорію bench або None.
-
-    Bench — директорія що містить apps/ та sites/.
-    """
-    site_dir = get_site_dir()
-    if site_dir is None:
-        return None
-    # Якщо site_dir всередині sites/ — bench на 2 рівні вище
-    if site_dir.parent.name == "sites":
-        return site_dir.parent.parent
-    # Якщо grunt.site в корені — це і є bench (legacy)
-    if (site_dir / "apps").is_dir():
-        return site_dir
-    return None
-
-
 def get_apps_dir() -> Path:
     """Повертає директорію додатків: локальну apps/ або глобальний ~/.grunt/apps/."""
     site_dir = get_site_dir()

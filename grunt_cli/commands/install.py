@@ -23,8 +23,9 @@ def install(project_name: str, repo: str, branch: str) -> None:
 
     \b
       <project_name>/
-        grunt/            ← фреймворк (клонований репозиторій)
-        apps/             ← директорія для додатків
+        apps/
+          grunt/          ← фреймворк (клонований репозиторій)
+          ...             ← інші додатки
         grunt.site        ← маркер-файл сайту
         .env              ← конфігурація
     """
@@ -36,24 +37,25 @@ def install(project_name: str, repo: str, branch: str) -> None:
 
     site_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Клонуємо Grunt framework
+    # 1. Створюємо структуру сайту
+    apps_dir = site_dir / "apps"
+    apps_dir.mkdir(exist_ok=True)
+
+    # 2. Клонуємо Grunt framework в apps/grunt
     console.print(f"[dim]Клоную Grunt framework з {repo}...[/dim]")
     result = subprocess.run(
         ["git", "clone", "--branch", branch, "--depth", "1", repo, "grunt"],
-        cwd=str(site_dir),
+        cwd=str(apps_dir),
     )
     if result.returncode != 0:
         console.print("[red]✗[/red] Не вдалося клонувати репозиторій")
         raise SystemExit(1)
     console.print("[green]✓[/green] Grunt framework встановлено")
 
-    # 2. Створюємо структуру сайту
-    (site_dir / "apps").mkdir(exist_ok=True)
-
     site_config = {
-        "framework_path": "grunt",
+        "framework_path": "apps/grunt",
         "apps_path": "apps",
-        "installed_apps": [],
+        "installed_apps": ["grunt"],
     }
     (site_dir / "grunt.site").write_text(json.dumps(site_config, ensure_ascii=False, indent=2))
 
@@ -66,7 +68,7 @@ def install(project_name: str, repo: str, branch: str) -> None:
     (site_dir / ".env").write_text(env_content)
 
     # 4. Встановлюємо Python-залежності
-    grunt_dir = site_dir / "grunt"
+    grunt_dir = apps_dir / "grunt"
     console.print("[dim]Встановлюю Python-залежності...[/dim]")
     result = subprocess.run(
         [sys.executable, "-m", "pip", "install", "-e", "."],

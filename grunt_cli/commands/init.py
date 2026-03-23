@@ -11,7 +11,7 @@ from pathlib import Path
 import click
 import httpx
 
-from grunt_cli.helpers import console, get_bench_dir, get_site_dir
+from grunt_cli.helpers import console, get_site_dir
 
 
 @click.command()
@@ -25,8 +25,7 @@ def init() -> None:
         )
         raise SystemExit(1)
 
-    bench_dir = get_bench_dir()
-    grunt_dir = (bench_dir / "apps" / "grunt") if bench_dir else (site_dir / "grunt")
+    grunt_dir = site_dir / "apps" / "grunt"
 
     # 1. Генерація SECRET_KEY
     env_file = site_dir / ".env"
@@ -76,7 +75,7 @@ def init() -> None:
                 json={"email": email, "password": password, "full_name": full_name},
                 timeout=5.0,
             )
-            if resp.status_code == 200:
+            if resp.status_code in (200, 201):
                 console.print(f"[green]✓[/green] Адміністратор {email} створений")
             elif resp.status_code == 409:
                 console.print(f"[yellow]~[/yellow] Користувач {email} вже існує")

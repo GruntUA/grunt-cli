@@ -11,7 +11,7 @@ from pathlib import Path
 
 import click
 
-from grunt_cli.helpers import console, get_bench_dir, get_site_dir
+from grunt_cli.helpers import console, get_site_dir
 
 
 @click.command()
@@ -33,12 +33,7 @@ def serve(
         console.print("[red]✗[/red] grunt.site не знайдено. Перейди у директорію Grunt-проекту.")
         raise SystemExit(1)
 
-    bench_dir = get_bench_dir()
-    # Bench-структура: apps/grunt/ — фреймворк окремо від сайту
-    if bench_dir is not None:
-        grunt_dir = bench_dir / "apps" / "grunt"
-    else:
-        grunt_dir = site_dir / "grunt"
+    grunt_dir = site_dir / "apps" / "grunt"
 
     if not grunt_dir.exists():
         console.print(
@@ -66,9 +61,8 @@ def serve(
     if env_file.exists():
         backend_env["DOTENV_PATH"] = str(env_file)
 
-    # Знаходимо Python: bench venv → системний
-    bench_root = bench_dir or site_dir
-    venv_python = bench_root / ".venv" / "bin" / "python"
+    # Знаходимо Python: site venv → системний
+    venv_python = site_dir / ".venv" / "bin" / "python"
     python_exe = str(venv_python) if venv_python.exists() else sys.executable
 
     if not frontend_only and backend_dir.exists():

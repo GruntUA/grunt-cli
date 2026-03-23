@@ -7,7 +7,7 @@ import sys
 
 import click
 
-from grunt_cli.helpers import console, get_bench_dir, get_site_dir
+from grunt_cli.helpers import console, get_site_dir
 
 
 @click.group()
@@ -20,8 +20,7 @@ def _backend_dir():
     if site_dir is None:
         console.print("[red]✗[/red] grunt.site не знайдено. Перейди у директорію Grunt-проекту.")
         raise SystemExit(1)
-    bench_dir = get_bench_dir()
-    grunt_dir = (bench_dir / "apps" / "grunt") if bench_dir else (site_dir / "grunt")
+    grunt_dir = site_dir / "apps" / "grunt"
     return grunt_dir / "backend"
 
 
