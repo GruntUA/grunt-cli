@@ -11,7 +11,7 @@ from pathlib import Path
 import click
 import httpx
 
-from grunt_cli.helpers import console, get_site_dir
+from grunt_cli.helpers import console, get_bench_dir, get_site_dir
 
 
 @click.command()
@@ -24,7 +24,9 @@ def init() -> None:
             "Спочатку запусти [cyan]grunt install <назва>[/cyan]"
         )
         raise SystemExit(1)
-    grunt_dir = site_dir / "grunt"
+
+    bench_dir = get_bench_dir()
+    grunt_dir = (bench_dir / "apps" / "grunt") if bench_dir else (site_dir / "grunt")
 
     # 1. Генерація SECRET_KEY
     env_file = site_dir / ".env"
@@ -43,12 +45,17 @@ def init() -> None:
     backend_dir = grunt_dir / "backend"
     if backend_dir.exists():
         console.print("[dim]Застосовую міграції...[/dim]")
+        import os
         result = subprocess.run(
             ["alembic", "upgrade", "head"],
             capture_output=True,
             text=True,
-            cwd=str(backend_dir),
-            env={**__import__("os").environ, "DOTENV_PATH": str(env_file)},
+            cwd=str(site_dir),
+            env={
+                **os.environ,
+                "DOTENV_PATH": str(env_file),
+                "PYTHONPATH": str(backend_dir),
+            },
         )
         if result.returncode == 0:
             console.print("[green]✓[/green] Таблиці БД створені")

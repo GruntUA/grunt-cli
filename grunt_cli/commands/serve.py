@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import signal
 import subprocess
 import sys
@@ -10,7 +11,7 @@ from pathlib import Path
 
 import click
 
-from grunt_cli.helpers import console, get_site_dir
+from grunt_cli.helpers import console, get_bench_dir, get_site_dir
 
 
 @click.command()
@@ -31,7 +32,13 @@ def serve(
     if site_dir is None:
         console.print("[red]✗[/red] grunt.site не знайдено. Перейди у директорію Grunt-проекту.")
         raise SystemExit(1)
-    grunt_dir = site_dir / "grunt"
+
+    bench_dir = get_bench_dir()
+    # Bench-структура: apps/grunt/ — фреймворк окремо від сайту
+    if bench_dir is not None:
+        grunt_dir = bench_dir / "apps" / "grunt"
+    else:
+        grunt_dir = site_dir / "grunt"
 
     if not grunt_dir.exists():
         console.print(
@@ -53,9 +60,20 @@ def serve(
 
     backend_dir = grunt_dir / "backend"
 
+    # Середовище для backend: .env з site_dir, PYTHONPATH на backend
+    backend_env = {**os.environ}
+    env_file = site_dir / ".env"
+    if env_file.exists():
+        backend_env["DOTENV_PATH"] = str(env_file)
+
+    # Знаходимо Python: bench venv → системний
+    bench_root = bench_dir or site_dir
+    venv_python = bench_root / ".venv" / "bin" / "python"
+    python_exe = str(venv_python) if venv_python.exists() else sys.executable
+
     if not frontend_only and backend_dir.exists():
         backend_cmd = [
-            sys.executable,
+            python_exe,
             "-m",
             "uvicorn",
             "grunt.main:app",
@@ -69,7 +87,13 @@ def serve(
 
         console.print(f"[green]▶[/green] Backend:  http://{host}:{port}")
         console.print(f"  [dim]API docs: http://localhost:{port}/docs[/dim]")
-        procs.append(subprocess.Popen(backend_cmd, cwd=str(backend_dir)))
+        console.print(f"  [dim]Site:     {site_dir}[/dim]")
+        # Запускаємо з cwd=site_dir щоб відносні шляхи (grunt.db) вказували на сайт
+        procs.append(subprocess.Popen(
+            backend_cmd,
+            cwd=str(site_dir),
+            env={**backend_env, "PYTHONPATH": str(backend_dir)},
+        ))
 
     if not backend_only:
         pkg_json = grunt_dir / "package.json"

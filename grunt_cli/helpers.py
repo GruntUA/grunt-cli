@@ -15,11 +15,40 @@ _LOCAL_HOSTS = {"localhost", "127.0.0.1"}
 
 
 def get_site_dir() -> Path | None:
-    """Повертає директорію поточного Grunt-сайту або None якщо не знайдено."""
+    """Повертає директорію поточного Grunt-сайту або None якщо не знайдено.
+
+    Шукає grunt.site у поточній директорії та батьківських.
+    Якщо не знайдено — шукає в sites/*/ (bench-структура).
+    """
     cwd = Path.cwd()
+    # Прямий пошук: cwd та батьківські директорії
     for parent in [cwd, *cwd.parents]:
         if (parent / "grunt.site").exists():
             return parent
+    # Bench-структура: sites/*/grunt.site
+    for parent in [cwd, *cwd.parents]:
+        sites_dir = parent / "sites"
+        if sites_dir.is_dir():
+            for site in sites_dir.iterdir():
+                if site.is_dir() and (site / "grunt.site").exists():
+                    return site
+    return None
+
+
+def get_bench_dir() -> Path | None:
+    """Повертає кореневу директорію bench або None.
+
+    Bench — директорія що містить apps/ та sites/.
+    """
+    site_dir = get_site_dir()
+    if site_dir is None:
+        return None
+    # Якщо site_dir всередині sites/ — bench на 2 рівні вище
+    if site_dir.parent.name == "sites":
+        return site_dir.parent.parent
+    # Якщо grunt.site в корені — це і є bench (legacy)
+    if (site_dir / "apps").is_dir():
+        return site_dir
     return None
 
 
