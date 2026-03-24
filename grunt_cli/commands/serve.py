@@ -88,7 +88,7 @@ def serve(
             str(port),
         ]
         if not no_reload:
-            backend_cmd.append("--reload")
+            backend_cmd.extend(["--reload", "--reload-dir", str(backend_dir)])
 
         console.print(f"[green]▶[/green] Backend:  http://{host}:{port}")
         console.print(f"  [dim]API docs: http://localhost:{port}/docs[/dim]")
