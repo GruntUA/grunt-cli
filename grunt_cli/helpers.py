@@ -35,11 +35,35 @@ def get_site_dir() -> Path | None:
     return None
 
 
-def get_apps_dir() -> Path:
-    """Повертає директорію додатків: локальну apps/ або глобальний ~/.grunt/apps/."""
+def get_bench_dir() -> Path | None:
+    """Повертає кореневу директорію bench (де є apps/ і sites/).
+
+    Bench-структура:
+        my-bench/
+        ├── apps/          ← додатки
+        ├── sites/         ← сайти
+        │   └── my-site/
+        │       └── grunt.site
+        └── .venv/
+    """
+    cwd = Path.cwd()
+    for parent in [cwd, *cwd.parents]:
+        if (parent / "apps").is_dir() and (parent / "sites").is_dir():
+            return parent
+    # Fallback: якщо site_dir знайдено, bench — його прабатько
     site_dir = get_site_dir()
     if site_dir is not None:
-        return site_dir / "apps"
+        bench = site_dir.parent.parent  # sites/my-site → sites → bench
+        if (bench / "apps").is_dir():
+            return bench
+    return None
+
+
+def get_apps_dir() -> Path:
+    """Повертає директорію додатків: bench/apps/ або глобальний ~/.grunt/apps/."""
+    bench = get_bench_dir()
+    if bench is not None:
+        return bench / "apps"
     global_dir = Path.home() / ".grunt" / "apps"
     global_dir.mkdir(parents=True, exist_ok=True)
     return global_dir
