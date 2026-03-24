@@ -22,6 +22,7 @@ from grunt_cli.commands.auth import auth  # noqa: E402
 from grunt_cli.commands.app import app  # noqa: E402
 from grunt_cli.commands.update import update  # noqa: E402
 from grunt_cli.commands.site import site  # noqa: E402
+from grunt_cli.commands.test import test  # noqa: E402
 
 cli.add_command(install)
 cli.add_command(init)
@@ -32,3 +33,4 @@ cli.add_command(auth)
 cli.add_command(app)
 cli.add_command(update)
 cli.add_command(site)
+cli.add_command(test)
