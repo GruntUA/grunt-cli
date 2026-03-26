@@ -46,9 +46,11 @@ class TestInstall:
             result = runner.invoke(cli, ["install", str(project)])
             assert result.exit_code != 0
 
-    @patch("grunt_cli.commands.install.subprocess.run")
-    def test_install_creates_structure(self, mock_run, runner, tmp_path):
-        mock_run.return_value = MagicMock(returncode=0)
+    @patch("grunt_cli.commands.install.install_npm_deps")
+    @patch("grunt_cli.commands.install.ensure_venv")
+    @patch("grunt_cli.commands.install.clone_grunt")
+    def test_install_creates_structure(self, mock_clone, mock_venv, mock_npm, runner, tmp_path):
+        mock_clone.return_value = tmp_path / "test-site" / "apps" / "grunt"
         with runner.isolated_filesystem(temp_dir=tmp_path) as td:
             result = runner.invoke(cli, ["install", "test-site"])
             site_dir = Path(td) / "test-site"
@@ -60,9 +62,11 @@ class TestInstall:
             config = json.loads((site_dir / "grunt.site").read_text())
             assert "grunt" in config["installed_apps"]
 
-    @patch("grunt_cli.commands.install.subprocess.run")
-    def test_install_git_clone_failure(self, mock_run, runner, tmp_path):
-        mock_run.return_value = MagicMock(returncode=1)
+    @patch("grunt_cli.commands.install.install_npm_deps")
+    @patch("grunt_cli.commands.install.ensure_venv")
+    @patch("grunt_cli.commands.install.clone_grunt")
+    def test_install_git_clone_failure(self, mock_clone, mock_venv, mock_npm, runner, tmp_path):
+        mock_clone.side_effect = SystemExit(1)
         with runner.isolated_filesystem(temp_dir=tmp_path):
             result = runner.invoke(cli, ["install", "test-site"])
             assert result.exit_code != 0
@@ -73,25 +77,29 @@ class TestInstall:
 
 class TestServe:
     def test_serve_no_site_dir(self, runner):
-        with patch("grunt_cli.commands.serve.get_site_dir", return_value=None):
-            result = runner.invoke(cli, ["serve"])
-            assert result.exit_code != 0
-
-    def test_serve_no_bench_dir(self, runner, tmp_path):
         with (
-            patch("grunt_cli.commands.serve.get_site_dir", return_value=tmp_path),
+            patch("grunt_cli.commands.serve.get_site_dir", return_value=None),
             patch("grunt_cli.commands.serve.get_bench_dir", return_value=None),
         ):
             result = runner.invoke(cli, ["serve"])
             assert result.exit_code != 0
 
-    def test_serve_no_grunt_framework(self, runner, tmp_path):
+    def test_serve_bench_no_grunt_framework(self, runner, tmp_path):
         bench = tmp_path / "bench"
         bench.mkdir()
         (bench / "apps").mkdir()
+        (bench / "sites").mkdir()
+        with (
+            patch("grunt_cli.commands.serve.get_site_dir", return_value=None),
+            patch("grunt_cli.commands.serve.get_bench_dir", return_value=bench),
+        ):
+            result = runner.invoke(cli, ["serve"])
+            assert result.exit_code != 0
+
+    def test_serve_flat_no_grunt_framework(self, runner, tmp_path):
         with (
             patch("grunt_cli.commands.serve.get_site_dir", return_value=tmp_path),
-            patch("grunt_cli.commands.serve.get_bench_dir", return_value=bench),
+            patch("grunt_cli.commands.serve.get_bench_dir", return_value=None),
         ):
             result = runner.invoke(cli, ["serve"])
             assert result.exit_code != 0
@@ -102,25 +110,44 @@ class TestServe:
 
 class TestInit:
     def test_init_no_site(self, runner):
-        with patch("grunt_cli.commands.init.get_site_dir", return_value=None):
+        """grunt init (без аргументу) — без bench і без site_dir — помилка."""
+        with (
+            patch("grunt_cli.commands.init.get_bench_dir", return_value=None),
+            patch("grunt_cli.commands.init.get_site_dir", return_value=None),
+        ):
             result = runner.invoke(cli, ["init"])
             assert result.exit_code != 0
 
-    @patch("grunt_cli.commands.init.subprocess.run")
-    @patch("grunt_cli.commands.init.httpx.post")
-    def test_init_generates_secret_key(self, mock_post, mock_run, runner, tmp_path):
+    @patch("grunt_cli.commands.init.run_alembic", return_value=True)
+    def test_init_generates_secret_key(self, mock_alembic, runner, tmp_path):
+        """grunt init (без аргументу) — flat site, генерує SECRET_KEY."""
         (tmp_path / "grunt.site").write_text("{}")
         (tmp_path / ".env").write_text("DEBUG=true\nSECRET_KEY=change-me\n")
         grunt_dir = tmp_path / "apps" / "grunt" / "backend"
         grunt_dir.mkdir(parents=True)
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
 
-        with patch("grunt_cli.commands.init.get_site_dir", return_value=tmp_path):
+        with (
+            patch("grunt_cli.commands.init.get_bench_dir", return_value=None),
+            patch("grunt_cli.commands.init.get_site_dir", return_value=tmp_path),
+        ):
             result = runner.invoke(cli, ["init"], input="n\n")
 
         env_content = (tmp_path / ".env").read_text()
         assert "change-me" not in env_content
         assert "SECRET_KEY=" in env_content
+
+    @patch("grunt_cli.commands.init.install_npm_deps")
+    @patch("grunt_cli.commands.init.ensure_venv")
+    @patch("grunt_cli.commands.init.clone_grunt")
+    def test_init_bench_creates_structure(self, mock_clone, mock_venv, mock_npm, runner, tmp_path):
+        """grunt init my-bench — створює bench-структуру."""
+        mock_clone.return_value = tmp_path / "my-bench" / "apps" / "grunt"
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            result = runner.invoke(cli, ["init", "my-bench"])
+            assert result.exit_code == 0
+            bench = Path("my-bench")
+            assert (bench / "apps").is_dir()
+            assert (bench / "sites").is_dir()
 
 
 # ── grunt db ────────────────────────────────────────────────────
@@ -334,16 +361,20 @@ class TestDoctype:
         assert "підключитись" in result.output
 
 
-# ── grunt site ──────────────────────────────────────────────────
+# ── grunt sites ──────────────────────────────────────────────────
 
 
-class TestSite:
-    def test_site_list_no_bench(self, runner):
-        with patch("grunt_cli.commands.site.get_bench_dir", return_value=None):
-            result = runner.invoke(cli, ["site", "list"])
-            assert result.exit_code != 0
+class TestSites:
+    def test_sites_list_no_bench_no_site(self, runner):
+        with (
+            patch("grunt_cli.commands.sites.get_bench_dir", return_value=None),
+            patch("grunt_cli.commands.sites.get_site_dir", return_value=None),
+        ):
+            result = runner.invoke(cli, ["sites", "list"])
+            assert result.exit_code == 0
+            assert "не знайдено" in result.output
 
-    def test_site_list_with_sites(self, runner, tmp_path):
+    def test_sites_list_with_sites(self, runner, tmp_path):
         bench = tmp_path / "bench"
         (bench / "apps").mkdir(parents=True)
         sites_dir = bench / "sites"
@@ -351,20 +382,68 @@ class TestSite:
         site.mkdir(parents=True)
         (site / "grunt.site").write_text(json.dumps({"installed_apps": ["grunt"]}))
 
-        with patch("grunt_cli.commands.site.get_bench_dir", return_value=bench):
-            result = runner.invoke(cli, ["site", "list"])
+        with patch("grunt_cli.commands.sites.get_bench_dir", return_value=bench):
+            result = runner.invoke(cli, ["sites", "list"])
             assert result.exit_code == 0
             assert "my-site" in result.output
 
-    def test_site_list_empty(self, runner, tmp_path):
+    def test_sites_list_empty(self, runner, tmp_path):
         bench = tmp_path / "bench"
         (bench / "apps").mkdir(parents=True)
         (bench / "sites").mkdir(parents=True)
 
-        with patch("grunt_cli.commands.site.get_bench_dir", return_value=bench):
-            result = runner.invoke(cli, ["site", "list"])
+        with patch("grunt_cli.commands.sites.get_bench_dir", return_value=bench):
+            result = runner.invoke(cli, ["sites", "list"])
             assert result.exit_code == 0
             assert "не знайдено" in result.output
+
+    @patch("grunt_cli.commands.sites.run_alembic", return_value=True)
+    def test_sites_new(self, mock_alembic, runner, tmp_path):
+        bench = tmp_path / "bench"
+        (bench / "apps" / "grunt").mkdir(parents=True)
+        (bench / "sites").mkdir(parents=True)
+
+        with patch("grunt_cli.commands.sites.get_bench_dir", return_value=bench):
+            result = runner.invoke(cli, ["sites", "new", "test-site"])
+            assert result.exit_code == 0
+            site_dir = bench / "sites" / "test-site"
+            assert (site_dir / "grunt.site").exists()
+            assert (site_dir / ".env").exists()
+            assert (bench / "sites" / "currentsite.txt").read_text() == "test-site"
+
+    def test_sites_new_already_exists(self, runner, tmp_path):
+        bench = tmp_path / "bench"
+        (bench / "apps").mkdir(parents=True)
+        site = bench / "sites" / "existing"
+        site.mkdir(parents=True)
+
+        with patch("grunt_cli.commands.sites.get_bench_dir", return_value=bench):
+            result = runner.invoke(cli, ["sites", "new", "existing"])
+            assert result.exit_code != 0
+
+    def test_sites_use(self, runner, tmp_path):
+        bench = tmp_path / "bench"
+        (bench / "apps").mkdir(parents=True)
+        site = bench / "sites" / "my-site"
+        site.mkdir(parents=True)
+        (site / "grunt.site").write_text("{}")
+
+        with patch("grunt_cli.commands.sites.get_bench_dir", return_value=bench):
+            result = runner.invoke(cli, ["sites", "use", "my-site"])
+            assert result.exit_code == 0
+            assert (bench / "sites" / "currentsite.txt").read_text() == "my-site"
+
+    def test_sites_drop(self, runner, tmp_path):
+        bench = tmp_path / "bench"
+        (bench / "apps").mkdir(parents=True)
+        site = bench / "sites" / "doomed"
+        site.mkdir(parents=True)
+        (site / "grunt.site").write_text("{}")
+
+        with patch("grunt_cli.commands.sites.get_bench_dir", return_value=bench):
+            result = runner.invoke(cli, ["sites", "drop", "doomed", "--force"])
+            assert result.exit_code == 0
+            assert not site.exists()
 
 
 # ── grunt update ────────────────────────────────────────────────

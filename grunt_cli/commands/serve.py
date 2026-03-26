@@ -60,6 +60,29 @@ def _serve_bench(
 
     python_exe = str(venv_dir / "bin" / "python") if (venv_dir / "bin" / "python").exists() else sys.executable
 
+    # Визначаємо активний сайт для env
+    backend_env = {**os.environ, "PYTHONPATH": str(backend_dir)}
+    active_site_dir = None
+    if sites:
+        # Перевіряємо, чи cwd знаходиться в одному з сайтів
+        try:
+            cwd = Path.cwd()
+            for s in sites:
+                sd = sites_dir / s
+                if cwd == sd or sd in cwd.parents:
+                    active_site_dir = sd
+                    break
+        except OSError:
+            pass
+        # Якщо не визначили за cwd і є лише один сайт — беремо його
+        if active_site_dir is None and len(sites) == 1:
+            active_site_dir = sites_dir / sites[0]
+
+    if active_site_dir is not None:
+        env_file = active_site_dir / ".env"
+        if env_file.exists():
+            backend_env["DOTENV_PATH"] = str(env_file)
+
     procs: list[subprocess.Popen] = []
 
     def shutdown(sig=None, frame=None):
@@ -79,13 +102,16 @@ def _serve_bench(
         console.print(f"[green]▶[/green] Backend:  http://{host}:{port}  [dim](bench, {len(sites)} сайтів)[/dim]")
         console.print(f"  [dim]API docs: http://localhost:{port}/docs[/dim]")
         for s in sites:
-            console.print(f"  [dim]Site:     {s}[/dim]")
+            marker = " ←" if active_site_dir and active_site_dir.name == s else ""
+            console.print(f"  [dim]Site:     {s}{marker}[/dim]")
 
-        # cwd=bench/apps/grunt — SiteManager робить Path.cwd().parent.parent → bench/
+        # cwd = активний сайт (щоб відносні шляхи як ./grunt.db працювали)
+        # або grunt_dir якщо сайт не визначено
+        backend_cwd = str(active_site_dir) if active_site_dir else str(grunt_dir)
         procs.append(subprocess.Popen(
             backend_cmd,
-            cwd=str(grunt_dir),
-            env={**os.environ, "PYTHONPATH": str(backend_dir)},
+            cwd=backend_cwd,
+            env=backend_env,
         ))
 
     if not backend_only:
