@@ -396,3 +396,94 @@ class TestUpdate:
 
         result = runner.invoke(cli, ["update", "--cli", "--no-deps"])
         assert result.exit_code == 0
+
+
+# ── grunt master ───────────────────────────────────────────────
+
+
+class TestMaster:
+    @patch("grunt_cli.commands.master.install_npm_deps", return_value=True)
+    @patch("grunt_cli.commands.master.ensure_venv")
+    @patch("grunt_cli.commands.master.clone_grunt")
+    @patch("grunt_cli.commands.master.run_alembic", return_value=True)
+    def test_master_creates_bench_sqlite(
+        self, mock_alembic, mock_clone, mock_venv, mock_npm, runner, tmp_path,
+    ):
+        mock_clone.return_value = tmp_path / "my-bench" / "apps" / "grunt"
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # input: project, site, db_choice=1(sqlite), db_file, port, no admin, no serve
+            result = runner.invoke(
+                cli,
+                ["master"],
+                input="my-bench\ndev.local\n1\ngrunt.db\n8000\nn\nn\n",
+            )
+            assert result.exit_code == 0
+            bench = Path("my-bench")
+            assert (bench / "apps").is_dir()
+            assert (bench / "sites").is_dir()
+            assert (bench / "sites" / "dev.local" / "grunt.site").exists()
+            assert (bench / "sites" / "dev.local" / ".env").exists()
+            assert (bench / "sites" / "currentsite.txt").read_text() == "dev.local"
+            env = (bench / "sites" / "dev.local" / ".env").read_text()
+            assert "sqlite+aiosqlite:///./grunt.db" in env
+            assert "SECRET_KEY=" in env
+
+    @patch("grunt_cli.commands.master.install_npm_deps", return_value=True)
+    @patch("grunt_cli.commands.master.ensure_venv")
+    @patch("grunt_cli.commands.master.clone_grunt")
+    @patch("grunt_cli.commands.master.run_alembic", return_value=True)
+    def test_master_creates_bench_postgres(
+        self, mock_alembic, mock_clone, mock_venv, mock_npm, runner, tmp_path,
+    ):
+        mock_clone.return_value = tmp_path / "proj" / "apps" / "grunt"
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # input: project, site, db_choice=2(postgres), host, port, user, password, db_name, port, no admin, no serve
+            result = runner.invoke(
+                cli,
+                ["master"],
+                input="proj\nprod.example.com\n2\nlocalhost\n5432\npostgres\nsecret\nmydb\n9000\nn\nn\n",
+            )
+            assert result.exit_code == 0
+            env = (Path("proj") / "sites" / "prod.example.com" / ".env").read_text()
+            assert "postgresql+asyncpg://postgres:secret@localhost:5432/mydb" in env
+
+    @patch("grunt_cli.commands.master.install_npm_deps", return_value=True)
+    @patch("grunt_cli.commands.master.ensure_venv")
+    @patch("grunt_cli.commands.master.clone_grunt")
+    @patch("grunt_cli.commands.master.run_alembic", return_value=True)
+    def test_master_creates_bench_mysql(
+        self, mock_alembic, mock_clone, mock_venv, mock_npm, runner, tmp_path,
+    ):
+        mock_clone.return_value = tmp_path / "proj" / "apps" / "grunt"
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            # input: project, site, db_choice=3(mysql), host, port, user, password(empty), db_name, port, no admin, no serve
+            result = runner.invoke(
+                cli,
+                ["master"],
+                input="proj\ndev.local\n3\nlocalhost\n3306\nroot\n\ngrunt\n8000\nn\nn\n",
+            )
+            assert result.exit_code == 0
+            env = (Path("proj") / "sites" / "dev.local" / ".env").read_text()
+            assert "mysql+aiomysql://root@localhost:3306/grunt" in env
+
+    @patch("grunt_cli.commands.master.install_npm_deps", return_value=True)
+    @patch("grunt_cli.commands.master.ensure_venv")
+    @patch("grunt_cli.commands.master.clone_grunt")
+    def test_master_existing_dir_fails(
+        self, mock_clone, mock_venv, mock_npm, runner, tmp_path,
+    ):
+        (tmp_path / "existing").mkdir()
+        (tmp_path / "existing" / "file").write_text("x")
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            import os
+            os.chdir(tmp_path)
+            result = runner.invoke(
+                cli,
+                ["master"],
+                input=f"{tmp_path / 'existing'}\ndev.local\n",
+            )
+            assert result.exit_code != 0

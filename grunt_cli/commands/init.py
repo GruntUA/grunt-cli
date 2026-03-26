@@ -1,33 +1,114 @@
-"""grunt init — ініціалізація Grunt-сайту."""
+"""grunt init — ініціалізація bench або сайту."""
 
 from __future__ import annotations
 
 import re
 import secrets
-import subprocess
-import sys
 from pathlib import Path
 
 import click
 import httpx
 
-from grunt_cli.helpers import console, get_site_dir
+from grunt_cli.helpers import (
+    GRUNT_REPO_URL,
+    clone_grunt,
+    console,
+    ensure_venv,
+    get_bench_dir,
+    get_current_site,
+    get_site_dir,
+    install_npm_deps,
+    run_alembic,
+)
 
 
 @click.command()
-def init() -> None:
-    """Ініціалізує Grunt-сайт: міграції БД, створення адміна."""
-    site_dir = get_site_dir()
-    if site_dir is None or not (site_dir / "grunt.site").exists():
-        console.print(
-            "[red]✗[/red] grunt.site не знайдено. "
-            "Спочатку запусти [cyan]grunt install <назва>[/cyan]"
-        )
+@click.argument("name", required=False, default=None)
+@click.option("--repo", default=GRUNT_REPO_URL, show_default=True, help="URL репозиторію Grunt")
+@click.option("--branch", default="master", show_default=True, help="Гілка для клонування")
+def init(name: str | None, repo: str, branch: str) -> None:
+    """Ініціалізує bench або поточний сайт.
+
+    \b
+    З аргументом — створює нову bench-структуру:
+      grunt init my-bench
+
+    \b
+    Без аргументу — ініціалізує поточний сайт (міграції БД, створення адміна):
+      cd my-bench && grunt init
+    """
+    if name is not None:
+        _init_bench(name, repo, branch)
+    else:
+        _init_site()
+
+
+# ---------------------------------------------------------------------------
+# grunt init <name> — створення bench
+# ---------------------------------------------------------------------------
+
+def _init_bench(name: str, repo: str, branch: str) -> None:
+    bench_dir = Path(name).resolve()
+
+    if bench_dir.exists() and any(bench_dir.iterdir()):
+        console.print(f"[red]✗[/red] Директорія '{name}' вже існує і не порожня")
         raise SystemExit(1)
 
-    grunt_dir = site_dir / "apps" / "grunt"
+    bench_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Генерація SECRET_KEY
+    apps_dir = bench_dir / "apps"
+    sites_dir = bench_dir / "sites"
+    apps_dir.mkdir(exist_ok=True)
+    sites_dir.mkdir(exist_ok=True)
+
+    # Клонуємо Grunt
+    grunt_dir = clone_grunt(apps_dir, repo, branch)
+
+    # Python deps (спільний venv)
+    ensure_venv(bench_dir, [grunt_dir])
+
+    # Node deps
+    install_npm_deps(grunt_dir, bench_dir)
+
+    console.print()
+    console.print(f"[bold green]✅ Bench створено у {bench_dir}[/bold green]")
+    console.print()
+    console.print("Наступні кроки:")
+    console.print(f"  [cyan]cd {name}[/cyan]")
+    console.print("  [cyan]grunt sites new dev.local[/cyan]    створити перший сайт")
+    console.print("  [cyan]grunt serve[/cyan]                  запустити сервери")
+
+
+# ---------------------------------------------------------------------------
+# grunt init (без аргументу) — ініціалізація поточного сайту
+# ---------------------------------------------------------------------------
+
+def _init_site() -> None:
+    bench_dir = get_bench_dir()
+
+    if bench_dir is not None:
+        site_dir = get_current_site()
+        if site_dir is None:
+            console.print(
+                "[red]✗[/red] Немає активного сайту. "
+                "Запусти [cyan]grunt sites use <site>[/cyan] або [cyan]grunt sites new <name>[/cyan]"
+            )
+            raise SystemExit(1)
+        grunt_dir = bench_dir / "apps" / "grunt"
+        venv_dir = bench_dir / ".venv"
+        console.print(f"[dim]Сайт: {site_dir.name}[/dim]")
+    else:
+        site_dir = get_site_dir()
+        if site_dir is None or not (site_dir / "grunt.site").exists():
+            console.print(
+                "[red]✗[/red] grunt.site не знайдено. "
+                "Спочатку запусти [cyan]grunt install <назва>[/cyan] або [cyan]grunt init <назва>[/cyan]"
+            )
+            raise SystemExit(1)
+        grunt_dir = site_dir / "apps" / "grunt"
+        venv_dir = site_dir / ".venv"
+
+    # 1. SECRET_KEY
     env_file = site_dir / ".env"
     if env_file.exists():
         env_content = env_file.read_text()
@@ -40,29 +121,13 @@ def init() -> None:
             env_file.write_text(env_content)
             console.print("[green]✓[/green] SECRET_KEY згенеровано")
 
-    # 2. Alembic міграції
+    # 2. Alembic
     backend_dir = grunt_dir / "backend"
     if backend_dir.exists():
         console.print("[dim]Застосовую міграції...[/dim]")
-        import os
-        result = subprocess.run(
-            ["alembic", "upgrade", "head"],
-            capture_output=True,
-            text=True,
-            cwd=str(site_dir),
-            env={
-                **os.environ,
-                "DOTENV_PATH": str(env_file),
-                "PYTHONPATH": str(backend_dir),
-            },
-        )
-        if result.returncode == 0:
-            console.print("[green]✓[/green] Таблиці БД створені")
-        else:
-            console.print(f"[red]✗[/red] Помилка міграцій:\n{result.stderr}")
-            console.print("[dim]Запусти вручну: cd grunt/backend && alembic upgrade head[/dim]")
+        run_alembic(site_dir, grunt_dir, venv_dir)
 
-    # 3. Створення адміністратора
+    # 3. Адміністратор
     console.print()
     if click.confirm("Створити адміністратора?", default=True):
         email = click.prompt("  Email", default="admin@grunt.local")
@@ -93,4 +158,3 @@ def init() -> None:
     console.print("Наступні кроки:")
     console.print("  [cyan]grunt serve[/cyan]          запустити сервер")
     console.print("  [cyan]grunt auth login[/cyan]     авторизуватись для CLI команд")
-    console.print("  [cyan]grunt doctype list[/cyan]   переглянути DocTypes")

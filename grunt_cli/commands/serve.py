@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -28,28 +29,40 @@ def serve(
     frontend_only: bool,
 ) -> None:
     """Запускає dev сервери (backend + frontend)."""
+    bench_dir = get_bench_dir()
     site_dir = get_site_dir()
-    if site_dir is None:
+
+    if bench_dir is not None:
+        _serve_bench(bench_dir, host, port, no_reload, backend_only, frontend_only)
+    elif site_dir is not None:
+        _serve_flat(site_dir, host, port, no_reload, backend_only, frontend_only)
+    else:
         console.print("[red]✗[/red] grunt.site не знайдено. Перейди у директорію Grunt-проекту.")
         raise SystemExit(1)
 
-    bench_dir = get_bench_dir()
-    if bench_dir is None:
-        console.print("[red]✗[/red] Bench-структуру не знайдено (потрібні apps/ та sites/).")
-        raise SystemExit(1)
 
+def _serve_bench(
+    bench_dir: Path, host: str, port: int, no_reload: bool, backend_only: bool, frontend_only: bool,
+) -> None:
+    """Запуск серверів у bench-режимі (мультисайтовість)."""
     grunt_dir = bench_dir / "apps" / "grunt"
+    backend_dir = grunt_dir / "backend"
+    venv_dir = bench_dir / ".venv"
 
     if not grunt_dir.exists():
-        console.print(
-            "[red]✗[/red] Grunt framework не знайдено в [cyan]{0}[/cyan]. "
-            "Запусти [cyan]grunt install grunt[/cyan]".format(grunt_dir)
-        )
+        console.print(f"[red]✗[/red] Grunt framework не знайдено: {grunt_dir}")
         raise SystemExit(1)
 
-    procs: list[subprocess.Popen[bytes]] = []
+    # Підраховуємо сайти
+    sites_dir = bench_dir / "sites"
+    sites = [d.name for d in sites_dir.iterdir()
+             if d.is_dir() and (d / "grunt.site").exists()] if sites_dir.is_dir() else []
 
-    def shutdown(sig: object = None, frame: object = None) -> None:
+    python_exe = str(venv_dir / "bin" / "python") if (venv_dir / "bin" / "python").exists() else sys.executable
+
+    procs: list[subprocess.Popen] = []
+
+    def shutdown(sig=None, frame=None):
         console.print("\n[dim]Зупиняю сервери...[/dim]")
         for p in procs:
             p.terminate()
@@ -58,42 +71,70 @@ def serve(
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
+    if not frontend_only and backend_dir.exists():
+        backend_cmd = [python_exe, "-m", "uvicorn", "grunt.main:app", "--host", host, "--port", str(port)]
+        if not no_reload:
+            backend_cmd.extend(["--reload", "--reload-dir", str(backend_dir)])
+
+        console.print(f"[green]▶[/green] Backend:  http://{host}:{port}  [dim](bench, {len(sites)} сайтів)[/dim]")
+        console.print(f"  [dim]API docs: http://localhost:{port}/docs[/dim]")
+        for s in sites:
+            console.print(f"  [dim]Site:     {s}[/dim]")
+
+        # cwd=bench/apps/grunt — SiteManager робить Path.cwd().parent.parent → bench/
+        procs.append(subprocess.Popen(
+            backend_cmd,
+            cwd=str(grunt_dir),
+            env={**os.environ, "PYTHONPATH": str(backend_dir)},
+        ))
+
+    if not backend_only:
+        _start_frontend(procs, grunt_dir, bench_dir)
+
+    _wait_for_procs(procs, shutdown)
+
+
+def _serve_flat(
+    site_dir: Path, host: str, port: int, no_reload: bool, backend_only: bool, frontend_only: bool,
+) -> None:
+    """Запуск серверів у flat-режимі (один сайт)."""
+    grunt_dir = site_dir / "apps" / "grunt"
     backend_dir = grunt_dir / "backend"
 
-    # Середовище для backend: .env з site_dir, PYTHONPATH на backend
+    if not grunt_dir.exists():
+        console.print(f"[red]✗[/red] Grunt framework не знайдено: {grunt_dir}")
+        raise SystemExit(1)
+
+    # Python exe
+    site_venv = site_dir / ".venv" / "bin" / "python"
+    python_exe = str(site_venv) if site_venv.exists() else sys.executable
+
+    # Env
     backend_env = {**os.environ}
     env_file = site_dir / ".env"
     if env_file.exists():
         backend_env["DOTENV_PATH"] = str(env_file)
 
-    # Знаходимо Python: bench venv → site venv → системний
-    bench_venv = bench_dir / ".venv" / "bin" / "python"
-    site_venv = site_dir / ".venv" / "bin" / "python"
-    if bench_venv.exists():
-        python_exe = str(bench_venv)
-    elif site_venv.exists():
-        python_exe = str(site_venv)
-    else:
-        python_exe = sys.executable
+    procs: list[subprocess.Popen] = []
+
+    def shutdown(sig=None, frame=None):
+        console.print("\n[dim]Зупиняю сервери...[/dim]")
+        for p in procs:
+            p.terminate()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGTERM, shutdown)
 
     if not frontend_only and backend_dir.exists():
-        backend_cmd = [
-            python_exe,
-            "-m",
-            "uvicorn",
-            "grunt.main:app",
-            "--host",
-            host,
-            "--port",
-            str(port),
-        ]
+        backend_cmd = [python_exe, "-m", "uvicorn", "grunt.main:app", "--host", host, "--port", str(port)]
         if not no_reload:
             backend_cmd.extend(["--reload", "--reload-dir", str(backend_dir)])
 
         console.print(f"[green]▶[/green] Backend:  http://{host}:{port}")
         console.print(f"  [dim]API docs: http://localhost:{port}/docs[/dim]")
         console.print(f"  [dim]Site:     {site_dir}[/dim]")
-        # Запускаємо з cwd=site_dir щоб відносні шляхи (grunt.db) вказували на сайт
+
         procs.append(subprocess.Popen(
             backend_cmd,
             cwd=str(site_dir),
@@ -101,13 +142,31 @@ def serve(
         ))
 
     if not backend_only:
-        pkg_json = grunt_dir / "package.json"
-        if not pkg_json.exists():
-            console.print("[yellow]⚠[/yellow]  package.json не знайдено, frontend пропущено")
-        else:
-            console.print("[green]▶[/green] Frontend: http://localhost:5173")
-            procs.append(subprocess.Popen(["npm", "run", "dev"], cwd=str(grunt_dir)))
+        _start_frontend(procs, grunt_dir, site_dir)
 
+    _wait_for_procs(procs, shutdown)
+
+
+def _start_frontend(procs: list, grunt_dir: Path, node_base_dir: Path) -> None:
+    """Запускає Vite frontend."""
+    if not (grunt_dir / "package.json").exists():
+        console.print("[yellow]⚠[/yellow]  package.json не знайдено, frontend пропущено")
+        return
+
+    local_npm = node_base_dir / ".node" / "bin" / "npm"
+    npm_bin = str(local_npm) if local_npm.exists() else shutil.which("npm") or "npm"
+
+    frontend_env = {**os.environ}
+    local_node_bin = node_base_dir / ".node" / "bin"
+    if local_node_bin.exists():
+        frontend_env["PATH"] = str(local_node_bin) + os.pathsep + frontend_env.get("PATH", "")
+
+    console.print("[green]▶[/green] Frontend: http://localhost:5173")
+    procs.append(subprocess.Popen([npm_bin, "run", "dev"], cwd=str(grunt_dir), env=frontend_env))
+
+
+def _wait_for_procs(procs: list, shutdown) -> None:
+    """Чекає на завершення процесів."""
     if not procs:
         console.print("[red]Нічого не запущено[/red]")
         return
