@@ -153,7 +153,7 @@ def master(repo: str, branch: str) -> None:
     # ── 11. Адміністратор ─────────────────────────────────────────────
     console.print()
     if click.confirm("Створити адміністратора?", default=True):
-        email = click.prompt("  Email", default="admin@grunt.local")
+        email = click.prompt("  Email", default="admin@example.com")
         password = click.prompt("  Пароль", hide_input=True, confirmation_prompt=True)
         full_name = click.prompt("  Повне ім'я", default="Адміністратор")
 
@@ -193,26 +193,46 @@ def master(repo: str, branch: str) -> None:
                 continue
 
         if ready:
-            try:
-                resp = httpx.post(
-                    f"{api_base}/api/v1/auth/register",
-                    headers=site_headers,
-                    json={"email": email, "password": password, "full_name": full_name},
-                    timeout=5.0,
-                )
-                if resp.status_code in (200, 201):
-                    console.print(f"[green]✓[/green] Адміністратор {email} створений")
-                    data = resp.json()
-                    token = data.get("access_token") or data.get("token")
-                    if token:
-                        save_token(token)
-                        console.print("[green]✓[/green] Токен збережено")
-                elif resp.status_code == 409:
-                    console.print(f"[yellow]~[/yellow] Користувач {email} вже існує")
-                else:
-                    console.print(f"[red]✗[/red] Помилка: {resp.text}")
-            except Exception as exc:  # noqa: BLE001
-                console.print(f"[yellow]⚠[/yellow]  Не вдалося створити адміна: {exc}")
+            registered = False
+            while not registered:
+                try:
+                    resp = httpx.post(
+                        f"{api_base}/api/v1/auth/register",
+                        headers=site_headers,
+                        json={"email": email, "password": password, "full_name": full_name},
+                        timeout=5.0,
+                    )
+                    if resp.status_code in (200, 201):
+                        console.print(f"[green]✓[/green] Адміністратор {email} створений")
+                        data = resp.json()
+                        token = data.get("access_token") or data.get("token")
+                        if token:
+                            save_token(token)
+                            console.print("[green]✓[/green] Токен збережено")
+                        registered = True
+                    elif resp.status_code == 409:
+                        console.print(f"[yellow]~[/yellow] Користувач {email} вже існує")
+                        registered = True
+                    elif resp.status_code == 422:
+                        # Помилка валідації — показуємо причину і пропонуємо ввести інші дані
+                        detail = resp.json().get("detail", [])
+                        for err in detail:
+                            msg = err.get("msg", "")
+                            loc = err.get("loc", [])
+                            field = loc[-1] if loc else "?"
+                            console.print(f"[red]✗[/red] {field}: {msg}")
+                        if not click.confirm("  Спробувати з іншими даними?", default=True):
+                            registered = True
+                        else:
+                            email = click.prompt("  Email", default=email)
+                            password = click.prompt("  Пароль", hide_input=True, confirmation_prompt=True)
+                            full_name = click.prompt("  Повне ім'я", default=full_name)
+                    else:
+                        console.print(f"[red]✗[/red] Помилка: {resp.text}")
+                        registered = True
+                except Exception as exc:  # noqa: BLE001
+                    console.print(f"[yellow]⚠[/yellow]  Не вдалося створити адміна: {exc}")
+                    registered = True
         else:
             console.print("[yellow]⚠[/yellow]  Сервер не відповів за 15 секунд")
             console.print("   Після запуску зареєструй адміна вручну:")
