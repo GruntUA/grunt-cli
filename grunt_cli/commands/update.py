@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import click
 
-from grunt_cli.helpers import console
+from grunt_cli.helpers import console, ensure_node
 
 
 def _git_pull(path: Path, label: str) -> bool:
@@ -65,17 +67,40 @@ def _git_pull(path: Path, label: str) -> bool:
 
 
 def _install_python_deps(path: Path, label: str) -> None:
-    """Встановлює Python-залежності через pip install -e ."""
+    """Встановлює Python-залежності через uv (або pip як fallback)."""
     if not (path / "pyproject.toml").exists() and not (path / "setup.py").exists():
         return
 
     console.print(f"  [dim]Встановлюю Python-залежності для {label}...[/dim]")
-    result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-e", "."],
-        cwd=str(path),
-        capture_output=True,
-        text=True,
-    )
+
+    # Шукаємо venv проєкту (bench/.venv або поруч з path)
+    bench = _find_bench_dir()
+    venv_dir = bench / ".venv" if bench else path.parent.parent / ".venv"
+    python_bin = venv_dir / "bin" / "python"
+
+    uv_bin = shutil.which("uv")
+    if uv_bin and python_bin.exists():
+        result = subprocess.run(
+            [uv_bin, "pip", "install", "-e", str(path), "--python", str(python_bin)],
+            cwd=str(path),
+            capture_output=True,
+            text=True,
+        )
+    elif python_bin.exists():
+        result = subprocess.run(
+            [str(python_bin), "-m", "pip", "install", "-e", "."],
+            cwd=str(path),
+            capture_output=True,
+            text=True,
+        )
+    else:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-e", "."],
+            cwd=str(path),
+            capture_output=True,
+            text=True,
+        )
+
     if result.returncode == 0:
         console.print(f"  [green]✓[/green] {label}: Python-залежності оновлено")
     else:
@@ -90,12 +115,27 @@ def _install_node_deps(path: Path, label: str) -> None:
     if not (path / "package.json").exists():
         return
 
+    # Шукаємо npm: bench/.node/bin/npm → глобальний npm
+    bench = _find_bench_dir()
+    node_base = bench if bench else path.parent.parent
+    npm_bin = ensure_node(node_base)
+    if not npm_bin:
+        console.print(f"  [yellow]⚠[/yellow]  {label}: npm не знайдено, пропускаю Node.js залежності")
+        return
+
     console.print(f"  [dim]Встановлюю Node.js залежності для {label}...[/dim]")
+
+    env = os.environ.copy()
+    local_node_bin = node_base / ".node" / "bin"
+    if local_node_bin.exists():
+        env["PATH"] = str(local_node_bin) + os.pathsep + env.get("PATH", "")
+
     result = subprocess.run(
-        ["npm", "install"],
+        [npm_bin, "install"],
         cwd=str(path),
         capture_output=True,
         text=True,
+        env=env,
     )
     if result.returncode == 0:
         console.print(f"  [green]✓[/green] {label}: Node.js залежності оновлено")
@@ -129,12 +169,25 @@ def _find_apps_dir() -> Path | None:
 
 def _get_cli_dir() -> Path | None:
     """Повертає директорію grunt-cli (editable install)."""
-    # Шукаємо через pip show
-    result = subprocess.run(
-        [sys.executable, "-m", "pip", "show", "grunt-cli"],
-        capture_output=True,
-        text=True,
-    )
+    # Спочатку перевіряємо стандартне розташування
+    default_dir = Path.home() / ".grunt-cli"
+    if (default_dir / ".git").exists():
+        return default_dir
+
+    # Fallback: шукаємо через uv або pip
+    uv_bin = shutil.which("uv")
+    if uv_bin:
+        result = subprocess.run(
+            [uv_bin, "pip", "show", "grunt-cli"],
+            capture_output=True,
+            text=True,
+        )
+    else:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "show", "grunt-cli"],
+            capture_output=True,
+            text=True,
+        )
     if result.returncode != 0:
         return None
 
