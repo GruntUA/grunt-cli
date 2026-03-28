@@ -15,6 +15,26 @@ import click
 from grunt_cli.helpers import console, get_bench_dir, get_site_dir
 
 
+def _kill_port(port: int) -> None:
+    """Kill any process occupying the given port."""
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f":{port}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        pids = result.stdout.strip().split()
+        if pids:
+            console.print(f"  [dim]Звільняю порт {port} (PID: {', '.join(pids)})[/dim]")
+            for pid in pids:
+                try:
+                    os.kill(int(pid), signal.SIGTERM)
+                except (ProcessLookupError, ValueError):
+                    pass
+            time.sleep(0.5)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+
 @click.command()
 @click.option("--host", default="0.0.0.0", show_default=True, help="Bind host для backend")
 @click.option("--port", default=8000, show_default=True, help="Порт backend")
@@ -94,6 +114,12 @@ def _serve_bench(
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
+    # Free ports from stale processes
+    if not frontend_only:
+        _kill_port(port)
+    if not backend_only:
+        _kill_port(5173)
+
     if not frontend_only and backend_dir.exists():
         backend_cmd = [python_exe, "-m", "uvicorn", "grunt.main:app", "--host", host, "--port", str(port)]
         if not no_reload:
@@ -151,6 +177,12 @@ def _serve_flat(
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
+
+    # Free ports from stale processes
+    if not frontend_only:
+        _kill_port(port)
+    if not backend_only:
+        _kill_port(5173)
 
     if not frontend_only and backend_dir.exists():
         backend_cmd = [python_exe, "-m", "uvicorn", "grunt.main:app", "--host", host, "--port", str(port)]

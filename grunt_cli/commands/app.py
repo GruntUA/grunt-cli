@@ -178,6 +178,88 @@ def app_install(name: str, site: str | None) -> None:
     console.print(f"[green]✓[/green] Додаток [bold]{name}[/bold] встановлено на {base_api}")
 
 
+@app.command("uninstall")
+@click.argument("name")
+@click.option("--site", default=None, help="Ім'я локального сайту або URL", metavar="SITE")
+@click.option("--yes", "-y", is_flag=True, help="Без підтвердження")
+def app_uninstall(name: str, site: str | None, yes: bool) -> None:
+    """Видалити додаток з сайту.
+
+    \b
+    Приклади:
+      grunt app uninstall cnap --site dev.local
+      grunt app uninstall cnap                     (автовизначення)
+      grunt app uninstall cnap --site localhost     (через API)
+    """
+    from grunt_cli.helpers import get_bench_dir
+
+    if name == "grunt":
+        console.print("[red]✗[/red] Не можна видалити системний додаток 'grunt'")
+        raise SystemExit(1)
+
+    # Визначаємо site_dir
+    resolved_site_dir = None
+    bench = get_bench_dir()
+
+    if site is not None and bench is not None:
+        local_site = bench / "sites" / site
+        if local_site.is_dir() and (local_site / "grunt.site").exists():
+            resolved_site_dir = local_site
+
+    if resolved_site_dir is None and site is None:
+        resolved_site_dir_maybe = get_site_dir()
+        if resolved_site_dir_maybe is not None:
+            resolved_site_dir = resolved_site_dir_maybe
+
+    # Локальне видалення
+    if resolved_site_dir is not None:
+        site_file = resolved_site_dir / "grunt.site"
+        site_config = json.loads(site_file.read_text())
+        installed = site_config.get("installed_apps", [])
+        if name not in installed:
+            console.print(f"[yellow]![/yellow] Додаток '{name}' не встановлено на {resolved_site_dir.name}")
+            return
+
+        if not yes:
+            click.confirm(
+                f"Видалити додаток '{name}' з сайту {resolved_site_dir.name}?",
+                abort=True,
+            )
+
+        installed.remove(name)
+        site_config["installed_apps"] = installed
+        site_file.write_text(json.dumps(site_config, ensure_ascii=False, indent=2))
+        console.print(f"[green]✓[/green] Додаток [bold]{name}[/bold] видалено з сайту [cyan]{resolved_site_dir.name}[/cyan]")
+        console.print(f"  [dim]Додатки: {', '.join(installed)}[/dim]")
+        console.print(f"  [dim]Файли додатку залишено у apps/{name}/[/dim]")
+        return
+
+    # Fallback: видалення через API
+    if site is not None:
+        base_api = resolve_site_api(site)
+    else:
+        base_api = DEFAULT_API
+
+    if not yes:
+        click.confirm(f"Видалити додаток '{name}' з {base_api}?", abort=True)
+
+    try:
+        resp = httpx.delete(
+            f"{base_api}/api/v1/apps/{name}",
+            headers=auth_headers(),
+            timeout=10.0,
+        )
+        if resp.status_code == 404:
+            console.print(f"[yellow]![/yellow] Додаток '{name}' не знайдено")
+            return
+        resp.raise_for_status()
+    except httpx.ConnectError:
+        console.print(f"[red]✗[/red] Не можу підключитись до {base_api}")
+        raise SystemExit(1)
+
+    console.print(f"[green]✓[/green] Додаток [bold]{name}[/bold] видалено з {base_api}")
+
+
 @app.command("list")
 @click.option("--api", default=DEFAULT_API, show_default=True)
 def app_list(api: str) -> None:
