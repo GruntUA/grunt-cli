@@ -118,7 +118,8 @@ def doctype_sync(name: str, api: str) -> None:
             console.print(f"[red]✗[/red] DocType '{name}' не знайдено")
             return
         resp.raise_for_status()
-        result = resp.json()["data"]
+        body = resp.json()
+        result = body.get("data", body)
     except httpx.ConnectError:
         console.print("[red]✗[/red] Сервер недоступний. Запусти [cyan]grunt serve[/cyan]")
         return
