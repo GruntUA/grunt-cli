@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import click
+from importlib.metadata import entry_points
 
 from grunt_cli import __version__
 
@@ -42,3 +43,25 @@ cli.add_command(test)
 cli.add_command(master)
 cli.add_command(shell)
 cli.add_command(fixtures)
+
+
+def _load_plugins() -> None:
+    """Discover and register CLI commands from installed Grunt apps.
+
+    Apps declare their commands in pyproject.toml:
+
+        [project.entry-points."grunt.commands"]
+        myapp = "myapp.cli:cli"
+
+    The registered group/command is added to the top-level ``cli`` group.
+    """
+    for ep in entry_points(group="grunt.commands"):
+        try:
+            cmd = ep.load()
+            if isinstance(cmd, click.BaseCommand):
+                cli.add_command(cmd, name=ep.name)
+        except Exception as exc:  # noqa: BLE001
+            click.echo(f"[warn] grunt.commands plugin '{ep.name}' failed to load: {exc}", err=True)
+
+
+_load_plugins()

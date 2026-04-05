@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
+import re
+from pathlib import Path
+
 import click
 import httpx
 from rich import box
 from rich.table import Table
 
-from grunt_cli.helpers import DEFAULT_API, auth_headers, console
+from grunt_cli.helpers import DEFAULT_API, auth_headers, console, get_apps_dir
 
 
 @click.group()
@@ -141,6 +145,117 @@ def doctype_test_gen(name: str, output: str | None, api: str) -> None:
         console.print(f"  Запуск: [dim]pytest {output} -v[/dim]")
     else:
         print(content)
+
+
+_FIELDTYPE_TO_PY: dict[str, str] = {
+    "Data":        "str | None",
+    "Text":        "str | None",
+    "LongText":    "str | None",
+    "RichText":    "str | None",
+    "Code":        "str | None",
+    "Select":      "str | None",
+    "Link":        "str | None",
+    "Attach":      "str | None",
+    "Image":       "str | None",
+    "Color":       "str | None",
+    "Signature":   "str | None",
+    "Int":         "int | None",
+    "Float":       "float | None",
+    "Check":       "bool",
+    "Date":        "datetime.date | None",
+    "Datetime":    "datetime.datetime | None",
+    "Time":        "datetime.time | None",
+    "JSON":        "dict | list | None",
+    "Geolocation": "dict | None",
+    "MultiLink":   "list[str]",
+}
+
+_NON_PHYSICAL = {"Section", "Column", "Tab", "Empty"}
+
+
+def _make_controller(name: str, fields: list[dict] | None = None) -> str:
+    skip_names = {"name", "id", "docstatus", "owner", "created_at", "modified_at", "modified_by"}
+    physical = [
+        f for f in (fields or [])
+        if f.get("fieldtype") not in _NON_PHYSICAL and f.get("fieldname") not in skip_names
+    ]
+
+    needs_datetime = any(
+        f["fieldtype"] in {"Date", "Datetime", "Time"} for f in physical
+    )
+    datetime_import = "import datetime\n" if needs_datetime else ""
+
+    I = "    "   # 4-space indent
+    II = I * 2  # 8-space indent
+
+    if physical:
+        field_lines = "\n".join(
+            f"{II}{f['fieldname']}: {_FIELDTYPE_TO_PY.get(f['fieldtype'], 'Any')}"
+            + (f"  # {f['label']}" if f.get("label") and f["label"] != f["fieldname"] else "")
+            for f in physical
+            if f["fieldtype"] not in {"Table", "MultiLink"}
+        )
+        table_lines = "\n".join(
+            f"{II}{f['fieldname']}: list[dict]  # Table: {f.get('options', '?')}"
+            for f in physical
+            if f["fieldtype"] == "Table"
+        )
+        all_field_lines = "\n".join(filter(None, [field_lines, table_lines]))
+        type_block = (
+            f"{I}# begin: auto-generated types\n"
+            f"{I}# This code is auto-generated. Do not modify anything in this block.\n"
+            f"\n"
+            f"{I}if TYPE_CHECKING:\n"
+            f"{all_field_lines}\n"
+            f"{I}# end: auto-generated types\n"
+            f"\n"
+        )
+        typing_imports = "from typing import TYPE_CHECKING, Any\n"
+    else:
+        type_block = ""
+        typing_imports = "from typing import Any\n"
+
+    return (
+        f'"""{name} controller.\n'
+        f"\n"
+        f"Business logic for {name} DocType.\n"
+        f'"""\n'
+        f"\n"
+        f"from __future__ import annotations\n"
+        f"\n"
+        f"{datetime_import}"
+        f"{typing_imports}"
+        f"\n"
+        f"\n"
+        f"class {name}Controller:\n"
+        f'{I}"""Controller for {name} documents."""\n'
+        f"\n"
+        f"{type_block}"
+        f"{I}def __init__(self, doc: dict[str, Any], session: Any | None = None) -> None:\n"
+        f"{II}self.doc = doc\n"
+        f"{II}self.session = session\n"
+        f"\n"
+        f"{I}async def before_insert(self) -> None:\n"
+        f'{II}"""Called before inserting a new document."""\n'
+        f"\n"
+        f"{I}async def after_insert(self) -> None:\n"
+        f'{II}"""Called after inserting a new document."""\n'
+        f"\n"
+        f"{I}async def before_save(self) -> None:\n"
+        f'{II}"""Called before saving (new or existing)."""\n'
+        f"\n"
+        f"{I}async def after_save(self) -> None:\n"
+        f'{II}"""Called after saving."""\n'
+        f"\n"
+        f"{I}async def before_delete(self) -> None:\n"
+        f'{II}"""Called before deletion."""\n'
+        f"\n"
+        f"{I}async def after_delete(self) -> None:\n"
+        f'{II}"""Called after deletion."""\n'
+        f"\n"
+        f"{I}async def validate(self) -> None:\n"
+        f'{II}"""Called during validation — raise ValueError to block save."""\n'
+    )
 
 
 def _fake_value(fieldtype: str, fieldname: str, options: str | None = None) -> object:
@@ -533,3 +648,192 @@ def doctype_sync(name: str, api: str) -> None:
         console.print(f"  Додано колонки: {', '.join(added)}")
     else:
         console.print("  [dim]Змін у схемі не було[/dim]")
+
+
+@doctype.command("scaffold")
+@click.argument("name")
+@click.option("--app", default=None, help="Папка app куди розмістити DocType (за замовчуванням: шукати в apps/)")
+@click.option("--force", is_flag=True, help="Перезаписати існуючі файли")
+@click.option("--py-only", "py_only", is_flag=True, help="Перегенерувати тільки Python контролер")
+def doctype_scaffold(name: str, app: str | None, force: bool, py_only: bool) -> None:
+    """Створити новий DocType з шаблонами JSON, Python контролером і JS скриптом.
+
+    \b
+    Структура:
+      apps/{app}/doctypes/{Name}/
+        ├── {Name}.json      # метадані DocType
+        ├── {Name}.py        # контролер
+        ├── {Name}.js        # client script
+        └── __init__.py
+
+    \b
+    Приклади:
+      grunt doctype scaffold Invoice
+      grunt doctype scaffold Invoice --app crm
+      grunt doctype scaffold Invoice --force
+    """
+    # Validate name
+    if not name or name[0].islower():
+        console.print("[red]✗[/red] Ім'я DocType повинно починатися з великої літери")
+        raise SystemExit(1)
+
+    # --py-only: find existing dir and regenerate controller only
+    if py_only:
+        apps_root = Path("grunt_apps") if Path("grunt_apps").exists() else Path("apps")
+        matches = list(apps_root.glob(f"**/{name}/{name}.json"))
+        if not matches:
+            console.print(f"[red]✗[/red] DocType '{name}' не знайдено в {apps_root}")
+            raise SystemExit(1)
+        if len(matches) > 1:
+            console.print("Знайдено кілька:")
+            for i, m in enumerate(matches, 1):
+                console.print(f"  [cyan]{i}[/cyan]. {m.parent.relative_to(apps_root)}")
+            choice = click.prompt("Номер", type=click.IntRange(1, len(matches)))
+            dt_dir = matches[choice - 1].parent
+        else:
+            dt_dir = matches[0].parent
+        json_file = dt_dir / f"{name}.json"
+        fields: list[dict] = []
+        try:
+            fields = json.loads(json_file.read_text(encoding="utf-8")).get("fields", [])
+        except Exception:
+            pass
+        py_file = dt_dir / f"{name}.py"
+        py_file.write_text(_make_controller(name, fields), encoding="utf-8")
+        console.print(f"[green]✓[/green] Контролер перегенеровано: [dim]{py_file}[/dim]")
+        return
+
+    # Find app directory
+    if not app:
+        # Auto-detect: look for apps/ or grunt_apps/
+        for potential in [Path("grunt_apps"), Path("apps")]:
+            if potential.is_dir():
+                apps_dir = potential
+                break
+        else:
+            console.print("[red]✗[/red] Папка apps/ або grunt_apps/ не знайдена")
+            console.print("  Перейди у базову директорію проекту або вкажи [cyan]--app[/cyan]")
+            raise SystemExit(1)
+        # Choose app dir — prompt if multiple exist
+        app_dirs = sorted(
+            [d for d in apps_dir.iterdir() if d.is_dir() and not d.name.startswith(".")],
+            key=lambda d: d.name,
+        )
+        if not app_dirs:
+            console.print(f"[red]✗[/red] Немає додатків у {apps_dir}")
+            raise SystemExit(1)
+        if len(app_dirs) == 1:
+            app_path = app_dirs[0]
+        else:
+            console.print("Оберіть додаток:")
+            for i, d in enumerate(app_dirs, 1):
+                console.print(f"  [cyan]{i}[/cyan]. {d.name}")
+            choice = click.prompt("Номер", type=click.IntRange(1, len(app_dirs)))
+            app_path = app_dirs[choice - 1]
+        app_name = app_path.name
+    else:
+        apps_dir = Path("grunt_apps") if Path("grunt_apps").exists() else Path("apps")
+        app_path = apps_dir / app
+        app_name = app
+
+    if not app_path.is_dir():
+        console.print(f"[red]✗[/red] Додаток '{app_name}' не знайдено в {apps_dir}")
+        raise SystemExit(1)
+
+    # Find doctype container (could be doctypes or {module}/doctypes)
+    doctype_base = None
+    for potential in app_path.glob("*/doctypes"):
+        doctype_base = potential.parent  # the module dir
+        break
+    if not doctype_base:
+        doctype_base = app_path
+
+    doctype_dir = doctype_base / "doctypes" / name
+    if doctype_dir.exists() and not force:
+        console.print(f"[red]✗[/red] Папка {doctype_dir} вже існує")
+        console.print(f"  Використай [cyan]--force[/cyan] для перезаписання")
+        raise SystemExit(1)
+
+    doctype_dir.mkdir(parents=True, exist_ok=True)
+
+    # Determine module name (for JSON metadata)
+    # If structure is myapp/{module}/doctypes/{Name}, module is {module}
+    # Otherwise it's the app name
+    module_name = doctype_base.name if doctype_base != app_path else app_name
+
+    # 1. JSON файл
+    json_content = {
+        "name": name,
+        "label": name,
+        "module": module_name,
+        "doctype": "DocType",
+        "is_system": False,
+        "fields": [
+            {"fieldname": "name", "label": "Назва", "fieldtype": "Data", "required": True}
+        ],
+    }
+    json_file = doctype_dir / f"{name}.json"
+    json_file.write_text(json.dumps(json_content, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    # 2. Python контролер
+    py_file = doctype_dir / f"{name}.py"
+    py_file.write_text(_make_controller(name, json_content["fields"]), encoding="utf-8")
+
+    # 3. JavaScript client script
+    js_content = f'''/**
+ * {name} Client Script
+ *
+ * Called in the UI when editing {name} documents.
+ */
+
+function on_load(frm) {{
+    // Code that runs when form loads
+    console.log('Loaded {name}', frm.doc)
+}}
+
+function on_change(frm, fieldname) {{
+    // Code that runs when a field changes
+    console.log('Changed field:', fieldname)
+}}
+
+function validate(frm) {{
+    // Return false to prevent save
+    if (true) {{
+        return true
+    }}
+}}
+
+function before_save(frm) {{
+    // Called before saving
+}}
+
+function after_save(frm) {{
+    // Called after saving
+}}
+'''
+    js_file = doctype_dir / f"{name}.js"
+    js_file.write_text(js_content, encoding="utf-8")
+
+    # 4. __init__.py
+    init_file = doctype_dir / "__init__.py"
+    init_file.write_text("", encoding="utf-8")
+
+    # Show summary
+    try:
+        rel_path = doctype_dir.relative_to(Path.cwd())
+    except ValueError:
+        rel_path = doctype_dir
+
+    console.print(f"[green]✓[/green] Створено DocType [bold]{name}[/bold]")
+    console.print(f"  Місце: [dim]{rel_path}[/dim]")
+    console.print(f"  Файли:")
+    console.print(f"    ├── [cyan]{name}.json[/cyan]     (метадані)")
+    console.print(f"    ├── [cyan]{name}.py[/cyan]       (контролер)")
+    console.print(f"    ├── [cyan]{name}.js[/cyan]       (client script)")
+    console.print(f"    └── [cyan]__init__.py[/cyan]")
+    console.print()
+    console.print("Наступні кроки:")
+    console.print(f"1. Відредагуй [cyan]{name}.json[/cyan] додай нові поля")
+    console.print(f"2. Запусти: [cyan]grunt serve --reload[/cyan]")
+    console.print(f"3. Перейди на http://localhost:5173/desk/list/{name}")
+
