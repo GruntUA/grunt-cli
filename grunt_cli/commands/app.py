@@ -42,34 +42,23 @@ def app() -> None:
 
 @app.command("create")
 @click.argument("name")
-@click.option("--title", default=None, help="Назва додатку")
-def app_create(name: str, title: str | None) -> None:
-    """Створити структуру нового Grunt-додатку."""
-    apps_dir = get_apps_dir()
-    app_dir = apps_dir / name
+@click.option("--no-git", is_flag=True, default=False, help="Не ініціалізувати git репозиторій")
+@click.option("--dest", default=None, help="Директорія для створення (за замовчуванням: apps/)")
+def app_create(name: str, no_git: bool, dest: str | None) -> None:
+    """Інтерактивно створити новий Grunt-додаток з повною структурою.
 
-    if app_dir.exists():
-        console.print(f"[red]✗[/red] Додаток '{name}' вже існує")
-        raise SystemExit(1)
+    \b
+    Приклади:
+      grunt app create my_crm
+      grunt app create my_crm --no-git
+      grunt app create my_crm --dest /tmp/apps
+    """
+    from pathlib import Path  # noqa: PLC0415
+    from grunt_cli.utils.boilerplate import make_boilerplate  # noqa: PLC0415
 
-    title = title or name.replace("_", " ").title()
-
-    # Створюємо структуру
-    (app_dir / "doctypes").mkdir(parents=True)
-    (app_dir / "fixtures").mkdir(parents=True)
-
-    app_json = {
-        "name": name,
-        "title": title,
-        "version": "0.1.0",
-        "modules": [],
-    }
-    (app_dir / "app.json").write_text(json.dumps(app_json, ensure_ascii=False, indent=2))
-    (app_dir / "README.md").write_text(f"# {title}\n\nGrunt app: {name}\n")
-
-    console.print(f"[green]✓[/green] Додаток [bold]{name}[/bold] створено у {app_dir}")
-    console.print(f"  [dim]{app_dir}/app.json[/dim]")
-    console.print(f"  [dim]{app_dir}/doctypes/[/dim]")
+    dest_path = Path(dest) if dest else get_apps_dir()
+    dest_path.mkdir(parents=True, exist_ok=True)
+    make_boilerplate(dest_path, name, no_git=no_git)
 
 
 @app.command("get")

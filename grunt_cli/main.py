@@ -25,6 +25,8 @@ from grunt_cli.commands.sites import sites  # noqa: E402
 from grunt_cli.commands.test import test  # noqa: E402
 from grunt_cli.commands.master import master  # noqa: E402
 from grunt_cli.commands.users import users  # noqa: E402
+from grunt_cli.commands.shell import shell  # noqa: E402
+from grunt_cli.commands.fixtures import fixtures  # noqa: E402
 
 cli.add_command(install)
 cli.add_command(init)
@@ -38,3 +40,5 @@ cli.add_command(update)
 cli.add_command(sites)
 cli.add_command(test)
 cli.add_command(master)
+cli.add_command(shell)
+cli.add_command(fixtures)
