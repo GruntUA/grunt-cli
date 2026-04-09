@@ -13,12 +13,10 @@ from grunt_cli.helpers import (
     GRUNT_REPO_URL,
     clone_grunt,
     console,
-    ensure_venv,
     get_bench_dir,
     get_current_site,
     get_site_dir,
-    install_npm_deps,
-    run_alembic,
+    run_mise,
 )
 
 
@@ -64,11 +62,8 @@ def _init_bench(name: str, repo: str, branch: str) -> None:
     # Клонуємо Grunt
     grunt_dir = clone_grunt(apps_dir, repo, branch)
 
-    # Python deps (спільний venv)
-    ensure_venv(bench_dir, [grunt_dir])
-
-    # Node deps
-    install_npm_deps(grunt_dir, bench_dir)
+    # Встановлюємо все через mise
+    run_mise(bench_dir, "install")
 
     console.print()
     console.print(f"[bold green]✅ Bench створено у {bench_dir}[/bold green]")
@@ -125,7 +120,7 @@ def _init_site() -> None:
     backend_dir = grunt_dir / "backend"
     if backend_dir.exists():
         console.print("[dim]Застосовую міграції...[/dim]")
-        run_alembic(site_dir, grunt_dir, venv_dir)
+        run_mise(site_dir, "db:migrate")
 
     # 3. Адміністратор
     console.print()

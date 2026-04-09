@@ -11,8 +11,7 @@ from grunt_cli.helpers import (
     GRUNT_REPO_URL,
     clone_grunt,
     console,
-    ensure_venv,
-    install_npm_deps,
+    run_mise,
 )
 
 
@@ -63,11 +62,8 @@ def install(project_name: str, repo: str, branch: str) -> None:
     )
     (site_dir / ".env").write_text(env_content)
 
-    # 5. Python deps
-    ensure_venv(site_dir, [grunt_dir])
-
-    # 6. Node deps
-    install_npm_deps(grunt_dir, site_dir)
+    # 5. Встановлення всього через mise
+    run_mise(site_dir, "install")
 
     # Фінал
     console.print()

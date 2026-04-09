@@ -149,134 +149,45 @@ def auth_headers() -> dict[str, str]:
 # Dependency installation helpers
 # ---------------------------------------------------------------------------
 
-def ensure_venv(target_dir: Path, install_targets: list[Path] | None = None) -> Path | None:
-    """Створює .venv у target_dir та встановлює пакети через uv (або pip).
-
-    Returns: шлях до .venv або None при невдачі.
+def run_mise(cwd: Path, *args: str) -> bool:
+    """Виконує команду mise у вказаній директорії.
+    Автоматично виконує 'mise trust' перед запуском.
     """
-    venv_dir = target_dir / ".venv"
-    uv_bin = shutil.which("uv")
+    mise_bin = shutil.which("mise")
+    if not mise_bin:
+        # Спроба знайти в стандартному місці
+        mise_bin = str(Path.home() / ".local/bin/mise")
+        if not Path(mise_bin).exists():
+            console.print("[red]✗[/red] [bold]mise[/bold] не знайдено. Встановіть його для роботи.")
+            return False
 
-    console.print("[dim]Встановлюю Python-залежності...[/dim]")
+    # 1. Trust
+    subprocess.run([str(mise_bin), "trust"], cwd=str(cwd), capture_output=True)
 
-    if uv_bin:
-        if not venv_dir.exists():
-            subprocess.run([uv_bin, "venv", str(venv_dir)], capture_output=True, text=True)
+    # 2. Run
+    # Якщо перший аргумент це задача (не містить двокрапки або відома як задача), 
+    # mise потребує 'run', але ми можемо передавати 'run' явно або неявно.
+    # Для надійності використовуємо 'run' для задач.
+    cmd = [str(mise_bin)]
+    if args and args[0] in {"install", "setup", "test", "lint", "fmt", "build"}:
+         cmd.extend(["run"])
+    
+    cmd.extend(args)
 
-        python_bin = str(venv_dir / "bin" / "python")
-        for target in install_targets or []:
-            result = subprocess.run(
-                [uv_bin, "pip", "install", "-e", str(target), "--python", python_bin],
-                cwd=str(target),
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                console.print("[yellow]⚠[/yellow]  Не вдалося встановити залежності автоматично")
-                console.print(f"  [dim]{result.stderr.strip()}[/dim]" if result.stderr else "")
-                return venv_dir
-    else:
-        for target in install_targets or []:
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-e", "."],
-                cwd=str(target),
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                console.print("[yellow]⚠[/yellow]  Не вдалося встановити залежності")
-                console.print(f"  [dim]{result.stderr.strip()}[/dim]" if result.stderr else "")
-                return venv_dir
-
-    console.print("[green]✓[/green] Python-залежності встановлено")
-    return venv_dir
-
-
-def ensure_node(target_dir: Path) -> str | None:
-    """Повертає шлях до npm, встановлюючи Node.js локально якщо потрібно.
-
-    Порядок:
-    1. npm вже є в PATH
-    2. Локальна копія в target_dir/.node
-    3. Завантажуємо Node.js LTS в target_dir/.node
-    """
-    npm_bin = shutil.which("npm")
-    if npm_bin:
-        return npm_bin
-
-    local_node_dir = target_dir / ".node"
-    local_npm = local_node_dir / "bin" / "npm"
-    if local_npm.exists():
-        return str(local_npm)
-
-    machine = platform.machine()
-    arch_map = {"x86_64": "x64", "aarch64": "arm64", "armv7l": "armv7l"}
-    arch = arch_map.get(machine)
-    if not arch:
-        console.print(f"[yellow]⚠[/yellow]  Невідома архітектура: {machine} — пропускаю Node.js")
-        return None
-
-    slug = f"node-v{NODE_LTS_VERSION}-linux-{arch}"
-    url = f"https://nodejs.org/dist/v{NODE_LTS_VERSION}/{slug}.tar.xz"
-
-    console.print(f"[dim]Завантажую Node.js v{NODE_LTS_VERSION} ({arch})...[/dim]")
-    tmp_path = target_dir / f"{slug}.tar.xz"
-    try:
-        urllib.request.urlretrieve(url, tmp_path)
-
-        with tarfile.open(tmp_path, "r:xz") as tar:
-            tar.extractall(path=target_dir)
-
-        extracted = target_dir / slug
-        if local_node_dir.exists():
-            shutil.rmtree(local_node_dir)
-        extracted.rename(local_node_dir)
-        tmp_path.unlink(missing_ok=True)
-
-        console.print(f"[green]✓[/green] Node.js v{NODE_LTS_VERSION} встановлено локально в .node/")
-        return str(local_npm)
-    except Exception as exc:
-        console.print(f"[yellow]⚠[/yellow]  Не вдалося завантажити Node.js: {exc}")
-        if tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
-        return None
-
-
-def install_npm_deps(grunt_dir: Path, node_base_dir: Path) -> bool:
-    """Встановлює Node.js залежності у grunt_dir. Повертає True при успіху."""
-    if not (grunt_dir / "package.json").exists():
-        return True
-
-    npm_bin = ensure_node(node_base_dir)
-    if not npm_bin:
-        console.print("[yellow]⚠[/yellow]  Не вдалося встановити Node.js автоматично")
-        console.print("  [dim]Встанови вручну: https://nodejs.org/[/dim]")
-        return False
-
-    console.print("[dim]Встановлюю Node.js залежності...[/dim]")
-    env = os.environ.copy()
-    local_node_bin = str(node_base_dir / ".node" / "bin")
-    env["PATH"] = local_node_bin + os.pathsep + env.get("PATH", "")
-
-    result = subprocess.run(
-        [npm_bin, "install"],
-        cwd=str(grunt_dir),
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-    if result.returncode == 0:
-        console.print("[green]✓[/green] Node.js залежності встановлено")
-        return True
-
-    console.print("[yellow]⚠[/yellow]  npm install не вдався")
-    console.print(f"  [dim]{result.stderr.strip()[:200]}[/dim]" if result.stderr else "")
-    return False
+    result = subprocess.run(cmd, cwd=str(cwd))
+    return result.returncode == 0
 
 
 def clone_grunt(target_dir: Path, repo: str = GRUNT_REPO_URL, branch: str = "master") -> Path:
     """Клонує Grunt framework в target_dir/grunt. Повертає шлях до grunt."""
     console.print(f"[dim]Клоную Grunt framework з {repo}...[/dim]")
+    result = subprocess.run(
+        ["git", "--version"], capture_output=True
+    )
+    if result.returncode != 0:
+        console.print("[red]✗[/red] [bold]git[/bold] не знайдено. Встановіть його.")
+        raise SystemExit(1)
+
     result = subprocess.run(
         ["git", "clone", "--branch", branch, "--depth", "1", repo, "grunt"],
         cwd=str(target_dir),
@@ -288,36 +199,4 @@ def clone_grunt(target_dir: Path, repo: str = GRUNT_REPO_URL, branch: str = "mas
     return target_dir / "grunt"
 
 
-def run_alembic(site_dir: Path, grunt_dir: Path, venv_dir: Path) -> bool:
-    """Запускає alembic upgrade head для сайту. Повертає True при успіху."""
-    backend_dir = grunt_dir / "backend"
-    alembic_ini = backend_dir / "alembic.ini"
-    if not alembic_ini.exists():
-        return True
-
-    venv_bin = venv_dir / "bin"
-    alembic_bin = venv_bin / "alembic"
-    if not alembic_bin.exists():
-        alembic_bin = Path(shutil.which("alembic") or "alembic")
-
-    env_file = site_dir / ".env"
-    result = subprocess.run(
-        [str(alembic_bin), "-c", str(alembic_ini), "upgrade", "head"],
-        capture_output=True,
-        text=True,
-        cwd=str(site_dir),
-        env={
-            **os.environ,
-            "DOTENV_PATH": str(env_file),
-            "PYTHONPATH": str(backend_dir),
-            "VIRTUAL_ENV": str(venv_dir),
-            "PATH": str(venv_bin) + os.pathsep + os.environ.get("PATH", ""),
-        },
-    )
-    if result.returncode == 0:
-        console.print("[green]✓[/green] Таблиці БД створені")
-        return True
-
-    error_msg = result.stderr.strip() or result.stdout.strip()
-    console.print(f"[red]✗[/red] Помилка міграцій:\n  {error_msg}")
-    return False
+    return result.returncode == 0

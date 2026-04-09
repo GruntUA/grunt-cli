@@ -10,7 +10,7 @@ from pathlib import Path
 
 import click
 
-from grunt_cli.helpers import console, ensure_node
+from grunt_cli.helpers import console, ensure_node, find_uv
 
 
 def _git_pull(path: Path, label: str) -> bool:
@@ -66,81 +66,10 @@ def _git_pull(path: Path, label: str) -> bool:
     return True
 
 
-def _install_python_deps(path: Path, label: str) -> None:
-    """Встановлює Python-залежності через uv (або pip як fallback)."""
-    if not (path / "pyproject.toml").exists() and not (path / "setup.py").exists():
-        return
-
-    console.print(f"  [dim]Встановлюю Python-залежності для {label}...[/dim]")
-
-    # Шукаємо venv проєкту (bench/.venv або поруч з path)
-    bench = _find_bench_dir()
-    venv_dir = bench / ".venv" if bench else path.parent.parent / ".venv"
-    python_bin = venv_dir / "bin" / "python"
-
-    uv_bin = shutil.which("uv")
-    if uv_bin and python_bin.exists():
-        result = subprocess.run(
-            [uv_bin, "pip", "install", "-e", str(path), "--python", str(python_bin)],
-            cwd=str(path),
-            capture_output=True,
-            text=True,
-        )
-    elif python_bin.exists():
-        result = subprocess.run(
-            [str(python_bin), "-m", "pip", "install", "-e", "."],
-            cwd=str(path),
-            capture_output=True,
-            text=True,
-        )
-    else:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-e", "."],
-            cwd=str(path),
-            capture_output=True,
-            text=True,
-        )
-
-    if result.returncode == 0:
-        console.print(f"  [green]✓[/green] {label}: Python-залежності оновлено")
-    else:
-        console.print(f"  [yellow]⚠[/yellow]  {label}: не вдалося оновити Python-залежності")
-        if result.stderr.strip():
-            for line in result.stderr.strip().splitlines()[-3:]:
-                console.print(f"    [dim]{line}[/dim]")
-
-
-def _install_node_deps(path: Path, label: str) -> None:
-    """Встановлює Node.js залежності через npm install."""
-    if not (path / "package.json").exists():
-        return
-
-    # Шукаємо npm: bench/.node/bin/npm → глобальний npm
-    bench = _find_bench_dir()
-    node_base = bench if bench else path.parent.parent
-    npm_bin = ensure_node(node_base)
-    if not npm_bin:
-        console.print(f"  [yellow]⚠[/yellow]  {label}: npm не знайдено, пропускаю Node.js залежності")
-        return
-
-    console.print(f"  [dim]Встановлюю Node.js залежності для {label}...[/dim]")
-
-    env = os.environ.copy()
-    local_node_bin = node_base / ".node" / "bin"
-    if local_node_bin.exists():
-        env["PATH"] = str(local_node_bin) + os.pathsep + env.get("PATH", "")
-
-    result = subprocess.run(
-        [npm_bin, "install"],
-        cwd=str(path),
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-    if result.returncode == 0:
-        console.print(f"  [green]✓[/green] {label}: Node.js залежності оновлено")
-    else:
-        console.print(f"  [yellow]⚠[/yellow]  {label}: не вдалося оновити Node.js залежності")
+def _install_deps(path: Path, label: str) -> None:
+    """Встановлює залежності через mise."""
+    console.print(f"  [dim]Оновлюю залежності для {label}...[/dim]")
+    run_mise(path, "install")
 
 
 def _find_bench_dir() -> Path | None:
@@ -174,21 +103,17 @@ def _get_cli_dir() -> Path | None:
     if (default_dir / ".git").exists():
         return default_dir
 
-    # Fallback: шукаємо через uv або pip
-    uv_bin = shutil.which("uv")
+    # Fallback: шукаємо через uv
+    uv_bin = find_uv()
     if uv_bin:
         result = subprocess.run(
             [uv_bin, "pip", "show", "grunt-cli"],
             capture_output=True,
             text=True,
         )
+        if result.returncode != 0:
+            return None
     else:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "show", "grunt-cli"],
-            capture_output=True,
-            text=True,
-        )
-    if result.returncode != 0:
         return None
 
     for line in result.stdout.splitlines():
@@ -239,7 +164,7 @@ def update(update_cli: bool, update_framework: bool, update_apps: bool, no_deps:
         else:
             pulled = _git_pull(cli_dir, "grunt-cli")
             if pulled and not no_deps:
-                _install_python_deps(cli_dir, "grunt-cli")
+                _install_deps(cli_dir, "grunt-cli")
             updated_something = True
         console.print()
 
@@ -254,8 +179,7 @@ def update(update_cli: bool, update_framework: bool, update_apps: bool, no_deps:
         else:
             pulled = _git_pull(framework_dir, "grunt")
             if pulled and not no_deps:
-                _install_python_deps(framework_dir, "grunt")
-                _install_node_deps(framework_dir, "grunt")
+                _install_deps(framework_dir, "grunt")
             updated_something = True
         console.print()
 
@@ -278,8 +202,7 @@ def update(update_cli: bool, update_framework: bool, update_apps: bool, no_deps:
                 for app_dir in app_dirs:
                     pulled = _git_pull(app_dir, app_dir.name)
                     if pulled and not no_deps:
-                        _install_python_deps(app_dir, app_dir.name)
-                        _install_node_deps(app_dir, app_dir.name)
+                        _install_deps(app_dir, app_dir.name)
                     updated_something = True
         console.print()
 

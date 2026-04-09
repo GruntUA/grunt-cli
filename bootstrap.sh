@@ -20,7 +20,12 @@ if ! command -v mise &>/dev/null; then
     info "Встановлення mise..."
     curl https://mise.jdx.dev/install.sh | sh
     # Додаємо mise в PATH для поточного сеансу
-    export PATH="$HOME/.local/share/mise/bin:$PATH"
+    export PATH="$HOME/.local/bin:$HOME/.local/share/mise/bin:$PATH"
+fi
+
+# Активуємо mise для поточного сеансу
+export PATH="$HOME/.local/bin:$HOME/.local/share/mise/bin:$PATH"
+if command -v mise &>/dev/null; then
     eval "$(mise activate bash)"
 fi
 
