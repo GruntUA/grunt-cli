@@ -24,6 +24,16 @@ if ! command -v mise &>/dev/null; then
     eval "$(mise activate bash)"
 fi
 
+INSTALL_DIR="${GRUNT_CLI_DIR:-$HOME/.grunt-cli}"
+REPO_URL="https://github.com/GruntUA/grunt-cli.git"
+
+if [ ! -d "$INSTALL_DIR" ]; then
+    info "Клонування репозиторію в $INSTALL_DIR..."
+    git clone --quiet "$REPO_URL" "$INSTALL_DIR"
+fi
+
+cd "$INSTALL_DIR"
+
 info "Налаштування grunt-cli..."
 mise trust
 mise install
