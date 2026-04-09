@@ -13,21 +13,16 @@ ok()   { printf "${GREEN}✔${NC} %s\n" "$*"; }
 info "Оновлення списку пакетів..."
 sudo apt update -y -q
 
-info "Встановлення curl та git..."
-sudo apt install -y -q curl git
+info "Встановлення системних залежностей (curl, git, gnupg)..."
+sudo apt install -y -q curl git gnupg
 
 if ! command -v mise &>/dev/null; then
     info "Встановлення mise..."
     curl https://mise.jdx.dev/install.sh | sh
-    # Додаємо mise в PATH для поточного сеансу
-    export PATH="$HOME/.local/bin:$HOME/.local/share/mise/bin:$PATH"
 fi
 
-# Активуємо mise для поточного сеансу
+# Налаштовуємо PATH для mise
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/bin:$PATH"
-if command -v mise &>/dev/null; then
-    eval "$(mise activate bash)"
-fi
 
 INSTALL_DIR="${GRUNT_CLI_DIR:-$HOME/.grunt-cli}"
 REPO_URL="https://github.com/GruntUA/grunt-cli.git"
