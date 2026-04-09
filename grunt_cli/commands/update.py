@@ -10,7 +10,7 @@ from pathlib import Path
 
 import click
 
-from grunt_cli.helpers import console, ensure_node, find_uv
+from grunt_cli.helpers import console, run_mise
 
 
 def _git_pull(path: Path, label: str) -> bool:

@@ -8,7 +8,7 @@ import shutil
 
 import click
 
-from grunt_cli.helpers import console, get_bench_dir, get_site_dir, run_alembic
+from grunt_cli.helpers import console, get_bench_dir, get_site_dir, run_mise
 
 
 @click.group()
@@ -90,9 +90,8 @@ def sites_new(name: str, db_url: str | None, no_migrate: bool) -> None:
     # Міграції
     if not no_migrate:
         grunt_dir = bench_dir / "apps" / "grunt"
-        venv_dir = bench_dir / ".venv"
         console.print("[dim]Застосовую міграції...[/dim]")
-        run_alembic(site_dir, grunt_dir, venv_dir)
+        run_mise(site_dir, "db:migrate")
 
     # Встановлюємо як активний
     (sites_dir / "currentsite.txt").write_text(name)

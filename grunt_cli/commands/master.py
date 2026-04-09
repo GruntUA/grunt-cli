@@ -13,9 +13,7 @@ from grunt_cli.helpers import (
     GRUNT_REPO_URL,
     clone_grunt,
     console,
-    ensure_venv,
-    install_npm_deps,
-    run_alembic,
+    run_mise,
     save_token,
 )
 
@@ -136,18 +134,13 @@ def master(repo: str, branch: str) -> None:
     # ── 7. Клонування фреймворку ──────────────────────────────────────
     grunt_dir = clone_grunt(apps_dir, repo, branch)
 
-    # ── 8. Python залежності ──────────────────────────────────────────
-    ensure_venv(project_dir, [grunt_dir])
+    # 8. Встановлення всього через mise
+    run_mise(project_dir, "install")
 
-    # ── 9. Node залежності ────────────────────────────────────────────
-    install_npm_deps(grunt_dir, project_dir)
-
-    # ── 10. Міграції ──────────────────────────────────────────────────
-    venv_dir = project_dir / ".venv"
-    backend_dir = grunt_dir / "backend"
-    if backend_dir.exists():
+    # 10. Міграції
+    if (grunt_dir / "backend").exists():
         console.print("[dim]Застосовую міграції...[/dim]")
-        run_alembic(site_dir, grunt_dir, venv_dir)
+        run_mise(site_dir, "db:migrate")
 
     # ── 11. Адміністратор ─────────────────────────────────────────────
     console.print()
@@ -162,6 +155,7 @@ def master(repo: str, branch: str) -> None:
         import sys
         import time
 
+        venv_dir = project_dir / ".venv"
         venv_bin = venv_dir / "bin"
         python_exe = str(venv_bin / "python") if (venv_bin / "python").exists() else sys.executable
         backend_cmd = [
