@@ -149,32 +149,57 @@ def auth_headers() -> dict[str, str]:
 # Dependency installation helpers
 # ---------------------------------------------------------------------------
 
-def run_mise(cwd: Path, *args: str, env: dict[str, str] | None = None) -> bool:
-    """Виконує команду mise у вказаній директорії.
-    Автоматично виконує 'mise trust' перед запуском.
-    """
+def get_mise_bin() -> str | None:
+    """Знаходить шлях до mise."""
     mise_bin = shutil.which("mise")
     if not mise_bin:
         # Спроба знайти в стандартному місці
-        mise_bin = str(Path.home() / ".local/bin/mise")
-        if not Path(mise_bin).exists():
-            console.print("[red]✗[/red] [bold]mise[/bold] не знайдено. Встановіть його для роботи.")
-            return False
+        candidates = [
+            Path.home() / ".local/bin/mise",
+            Path.home() / ".cargo/bin/mise",
+            Path.home() / ".local/share/mise/bin/mise",
+        ]
+        for c in candidates:
+            if c.exists():
+                return str(c)
+    return mise_bin
 
-    # 1. Trust
+
+def run_mise(cwd: Path, *args: str, env: dict[str, str] | None = None) -> bool:
+    """Виконує команду mise у вказаній директорії (блокує)."""
+    mise_bin = get_mise_bin()
+    if not mise_bin:
+        console.print("[red]✗[/red] [bold]mise[/bold] не знайдено. Встановіть його для роботи.")
+        return False
+
+    # Trust
     subprocess.run([str(mise_bin), "trust"], cwd=str(cwd), capture_output=True)
 
-    # 2. Run
     cmd = [str(mise_bin)]
-    # Якщо це відома задача, додаємо 'run'
-    if args and args[0] in {"install", "setup", "test", "lint", "fmt", "build", "db:migrate"}:
+    if args and args[0] in {"install", "setup", "test", "lint", "fmt", "build", "db:migrate", "serve", "dev"}:
          cmd.extend(["run"])
-    
     cmd.extend(args)
 
     final_env = {**os.environ, **(env or {})}
     result = subprocess.run(cmd, cwd=str(cwd), env=final_env)
     return result.returncode == 0
+
+
+def run_mise_popen(cwd: Path, *args: str, env: dict[str, str] | None = None, **kwargs) -> subprocess.Popen:
+    """Запускає команду mise у вказаній директорії (не блокує)."""
+    mise_bin = get_mise_bin() or "mise"
+    
+    # Trust (краще зробити заздалегідь, але на всяк випадок)
+    subprocess.run([str(mise_bin), "trust"], cwd=str(cwd), capture_output=True)
+
+    cmd = [str(mise_bin)]
+    if args and args[0] in {"install", "setup", "test", "lint", "fmt", "build", "db:migrate", "serve", "dev"}:
+         cmd.extend(["run"])
+    cmd.extend(args)
+
+    final_env = {**os.environ, **(env or {})}
+    # Для mise exec/run нам потрібно передати PATH
+    return subprocess.Popen(cmd, cwd=str(cwd), env=final_env, **kwargs)
 
 
 def clone_grunt(target_dir: Path, repo: str = GRUNT_REPO_URL, branch: str = "master") -> Path:

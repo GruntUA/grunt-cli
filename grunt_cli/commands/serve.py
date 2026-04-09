@@ -12,7 +12,7 @@ from pathlib import Path
 
 import click
 
-from grunt_cli.helpers import console, get_bench_dir, get_site_dir
+from grunt_cli.helpers import console, get_bench_dir, get_site_dir, run_mise_popen
 
 
 def _kill_port(port: int) -> None:
@@ -121,9 +121,9 @@ def _serve_bench(
         _kill_port(5173)
 
     if not frontend_only and backend_dir.exists():
-        backend_cmd = [python_exe, "-m", "uvicorn", "grunt.main:app", "--host", host, "--port", str(port)]
+        backend_args = ["x", "--", "python", "-m", "uvicorn", "grunt.main:app", "--host", host, "--port", str(port)]
         if not no_reload:
-            backend_cmd.extend(["--reload", "--reload-dir", str(backend_dir)])
+            backend_args.extend(["--reload", "--reload-dir", str(backend_dir)])
 
         console.print(f"[green]▶[/green] Backend:  http://{host}:{port}  [dim](bench, {len(sites)} сайтів)[/dim]")
         console.print(f"  [dim]API docs: http://localhost:{port}/docs[/dim]")
@@ -131,12 +131,10 @@ def _serve_bench(
             marker = " ←" if active_site_dir and active_site_dir.name == s else ""
             console.print(f"  [dim]Site:     {s}{marker}[/dim]")
 
-        # cwd = активний сайт (щоб відносні шляхи як ./grunt.db працювали)
-        # або grunt_dir якщо сайт не визначено
-        backend_cwd = str(active_site_dir) if active_site_dir else str(grunt_dir)
-        procs.append(subprocess.Popen(
-            backend_cmd,
-            cwd=backend_cwd,
+        backend_cwd = active_site_dir if active_site_dir else grunt_dir
+        procs.append(run_mise_popen(
+            backend_cwd,
+            *backend_args,
             env=backend_env,
         ))
 
@@ -185,17 +183,17 @@ def _serve_flat(
         _kill_port(5173)
 
     if not frontend_only and backend_dir.exists():
-        backend_cmd = [python_exe, "-m", "uvicorn", "grunt.main:app", "--host", host, "--port", str(port)]
+        backend_args = ["x", "--", "python", "-m", "uvicorn", "grunt.main:app", "--host", host, "--port", str(port)]
         if not no_reload:
-            backend_cmd.extend(["--reload", "--reload-dir", str(backend_dir)])
+            backend_args.extend(["--reload", "--reload-dir", str(backend_dir)])
 
         console.print(f"[green]▶[/green] Backend:  http://{host}:{port}")
         console.print(f"  [dim]API docs: http://localhost:{port}/docs[/dim]")
         console.print(f"  [dim]Site:     {site_dir}[/dim]")
 
-        procs.append(subprocess.Popen(
-            backend_cmd,
-            cwd=str(site_dir),
+        procs.append(run_mise_popen(
+            site_dir,
+            *backend_args,
             env={**backend_env, "PYTHONPATH": str(backend_dir)},
         ))
 
@@ -211,16 +209,8 @@ def _start_frontend(procs: list, grunt_dir: Path, node_base_dir: Path) -> None:
         console.print("[yellow]⚠[/yellow]  package.json не знайдено, frontend пропущено")
         return
 
-    local_npm = node_base_dir / ".node" / "bin" / "npm"
-    npm_bin = str(local_npm) if local_npm.exists() else shutil.which("npm") or "npm"
-
-    frontend_env = {**os.environ}
-    local_node_bin = node_base_dir / ".node" / "bin"
-    if local_node_bin.exists():
-        frontend_env["PATH"] = str(local_node_bin) + os.pathsep + frontend_env.get("PATH", "")
-
     console.print("[green]▶[/green] Frontend: http://localhost:5173")
-    procs.append(subprocess.Popen([npm_bin, "run", "dev"], cwd=str(grunt_dir), env=frontend_env))
+    procs.append(run_mise_popen(grunt_dir, "x", "--", "npm", "run", "dev", env=os.environ))
 
 
 def _wait_for_procs(procs: list, shutdown) -> None:
