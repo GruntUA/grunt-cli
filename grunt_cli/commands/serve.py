@@ -118,20 +118,21 @@ def _serve_bench(
         _kill_port(5173)
 
     if not frontend_only and backend_dir.exists():
-        backend_args = ["x", "--", "python", "-m", "uvicorn", "grunt.main:app", "--host", host, "--port", str(port)]
-        if not no_reload:
-            backend_args.extend(["--reload", "--reload-dir", str(backend_dir)])
-
+        backend_env.update({
+            "HOST": host,
+            "PORT": str(port),
+            "RELOAD": "--reload --reload-dir " + str(backend_dir) if not no_reload else ""
+        })
+        
         console.print(f"[green]▶[/green] Backend:  http://{host}:{port}  [dim](bench, {len(sites)} сайтів)[/dim]")
         console.print(f"  [dim]API docs: http://localhost:{port}/docs[/dim]")
         for s in sites:
             marker = " ←" if active_site_dir and active_site_dir.name == s else ""
             console.print(f"  [dim]Site:     {s}{marker}[/dim]")
 
-        backend_cwd = active_site_dir if active_site_dir else grunt_dir
         procs.append(run_mise_popen(
-            active_site_dir if active_site_dir else grunt_dir,
-            *backend_args,
+            grunt_dir,
+            "backend",
             env=backend_env,
             config_file=grunt_dir / "mise.toml"
         ))
@@ -140,8 +141,6 @@ def _serve_bench(
         _start_frontend(procs, grunt_dir, bench_dir)
 
     _wait_for_procs(procs, shutdown)
-
-
 
 
 def _start_frontend(procs: list, grunt_dir: Path, node_base_dir: Path) -> None:
@@ -153,7 +152,7 @@ def _start_frontend(procs: list, grunt_dir: Path, node_base_dir: Path) -> None:
     console.print("[green]▶[/green] Frontend: http://localhost:5173")
     procs.append(run_mise_popen(
         grunt_dir, 
-        "x", "--", "npm", "run", "dev", 
+        "frontend", 
         env=os.environ,
         config_file=grunt_dir / "mise.toml"
     ))

@@ -155,7 +155,7 @@ def run_mise(cwd: Path, *args: str, env: dict[str, str] | None = None, config_fi
     subprocess.run(trust_cmd, cwd=str(cwd), capture_output=True)
 
     cmd = [str(mise_bin)]
-    if args and args[0] in {"setup", "test", "lint", "fmt", "build", "db:migrate", "serve", "dev", "bootstrap"}:
+    if args and args[0] in {"setup", "test", "lint", "fmt", "build", "db:migrate", "serve", "dev", "bootstrap", "backend", "frontend"}:
          cmd.extend(["run"])
     cmd.extend(args)
 
@@ -178,7 +178,7 @@ def run_mise_popen(cwd: Path, *args: str, env: dict[str, str] | None = None, con
     subprocess.run(trust_cmd, cwd=str(cwd), capture_output=True)
 
     cmd = [str(mise_bin)]
-    if args and args[0] in {"setup", "test", "lint", "fmt", "build", "db:migrate", "serve", "dev"}:
+    if args and args[0] in {"setup", "test", "lint", "fmt", "build", "db:migrate", "serve", "dev", "bootstrap", "backend", "frontend"}:
          cmd.extend(["run"])
     cmd.extend(args)
 

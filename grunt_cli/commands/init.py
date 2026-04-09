@@ -112,20 +112,13 @@ def _init_site() -> None:
             env_file.write_text(env_content)
             console.print("[green]✓[/green] SECRET_KEY згенеровано")
 
-    # 2. Bootstrap & Alembic
+    # 2. Setup (Sync dependencies + Bootstrap + Migrate)
     backend_dir = grunt_dir / "backend"
     if backend_dir.exists():
-        console.print("[dim]Ініціалізація бази даних...[/dim]")
+        console.print("[dim]Налаштування середовища та бази даних...[/dim]")
         run_mise(
             grunt_dir,
-            "bootstrap",
-            env={"DOTENV_PATH": str(site_dir / ".env")}
-        )
-
-        console.print("[dim]Застосовую міграції...[/dim]")
-        run_mise(
-            grunt_dir, 
-            "db:migrate", 
+            "setup",
             env={"DOTENV_PATH": str(site_dir / ".env")}
         )
 
