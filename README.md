@@ -28,19 +28,37 @@ Mise will automatically install and manage:
 
 ## Installation
 
-### 1. Install Grunt CLI
+### Option 1: One-command setup (automated)
+
+If you are on Ubuntu/Debian, you can install everything (curl, git, mise, python, node, grunt-cli) with a single command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/GruntUA/grunt-cli/master/bootstrap.sh | bash
+```
+
+### Option 2: Manual step-by-step
+
+#### 1. Install Git and mise
+
+If you don't have them yet, install **curl**, **Git** and **[mise](https://mise.jdx.dev/)**:
+
+```bash
+# Install curl and Git (Ubuntu/Debian)
+sudo apt update && sudo apt install curl git -y
+
+# Install mise
+curl https://mise.jdx.dev/install.sh | sh
+```
+
+#### 2. Install Grunt CLI
 
 Clone the repository and use `mise` to set up the environment and install the CLI globally:
 
 ```bash
 git clone https://github.com/GruntUA/grunt-cli.git
 cd grunt-cli
+mise trust
 mise run install
-```
-
-This installs `grunt-cli` as a global `uv tool`. Verify with:
-```bash
-grunt --version
 ```
 
 ---
