@@ -55,7 +55,7 @@ def fixtures_dump(doctype: str, output: str | None, limit: int | None, filters: 
         resp.raise_for_status()
         body = resp.json()
     except httpx.ConnectError:
-        console.print(f"[red]✗[/red] Сервер недоступний. Запусти [cyan]grunt serve[/cyan]")
+        console.print("[red]✗[/red] Сервер недоступний. Запусти [cyan]grunt serve[/cyan]")
         raise SystemExit(1)
 
     records = body.get("data", [])

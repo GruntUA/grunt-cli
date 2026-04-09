@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 import click
@@ -11,7 +10,7 @@ import httpx
 from rich import box
 from rich.table import Table
 
-from grunt_cli.helpers import DEFAULT_API, auth_headers, console, get_apps_dir
+from grunt_cli.helpers import DEFAULT_API, auth_headers, console
 
 
 @click.group()
@@ -131,7 +130,7 @@ def doctype_test_gen(name: str, output: str | None, api: str) -> None:
         resp.raise_for_status()
         dt = resp.json()["data"]
     except httpx.ConnectError:
-        console.print(f"[red]✗[/red] Сервер недоступний. Запусти [cyan]grunt serve[/cyan]")
+        console.print("[red]✗[/red] Сервер недоступний. Запусти [cyan]grunt serve[/cyan]")
         raise SystemExit(1)
 
     content = _generate_tests(dt)
@@ -487,7 +486,7 @@ def doctype_export(name: str, output: str | None, include_children: bool, api: s
         resp.raise_for_status()
         dt = resp.json()["data"]
     except httpx.ConnectError:
-        console.print(f"[red]✗[/red] Сервер недоступний. Запусти [cyan]grunt serve[/cyan]")
+        console.print("[red]✗[/red] Сервер недоступний. Запусти [cyan]grunt serve[/cyan]")
         raise SystemExit(1)
 
     export_data = {"doctype": dt}
@@ -610,7 +609,7 @@ def doctype_import(file: str, update: bool, api: str) -> None:
                     console.print(f"  [red]✗[/red] {dt_name}: {resp.status_code} {resp.text[:80]}")
 
         except httpx.ConnectError:
-            console.print(f"[red]✗[/red] Сервер недоступний. Запусти [cyan]grunt serve[/cyan]")
+            console.print("[red]✗[/red] Сервер недоступний. Запусти [cyan]grunt serve[/cyan]")
             raise SystemExit(1)
         except Exception as e:
             errors += 1
@@ -751,7 +750,7 @@ def doctype_scaffold(name: str, app: str | None, force: bool, py_only: bool) -> 
     doctype_dir = doctype_base / "doctypes" / name
     if doctype_dir.exists() and not force:
         console.print(f"[red]✗[/red] Папка {doctype_dir} вже існує")
-        console.print(f"  Використай [cyan]--force[/cyan] для перезаписання")
+        console.print("  Використай [cyan]--force[/cyan] для перезаписання")
         raise SystemExit(1)
 
     doctype_dir.mkdir(parents=True, exist_ok=True)
@@ -826,14 +825,14 @@ function after_save(frm) {{
 
     console.print(f"[green]✓[/green] Створено DocType [bold]{name}[/bold]")
     console.print(f"  Місце: [dim]{rel_path}[/dim]")
-    console.print(f"  Файли:")
+    console.print("  Файли:")
     console.print(f"    ├── [cyan]{name}.json[/cyan]     (метадані)")
     console.print(f"    ├── [cyan]{name}.py[/cyan]       (контролер)")
     console.print(f"    ├── [cyan]{name}.js[/cyan]       (client script)")
-    console.print(f"    └── [cyan]__init__.py[/cyan]")
+    console.print("    └── [cyan]__init__.py[/cyan]")
     console.print()
     console.print("Наступні кроки:")
     console.print(f"1. Відредагуй [cyan]{name}.json[/cyan] додай нові поля")
-    console.print(f"2. Запусти: [cyan]grunt serve --reload[/cyan]")
+    console.print("2. Запусти: [cyan]grunt serve --reload[/cyan]")
     console.print(f"3. Перейди на http://localhost:5173/desk/list/{name}")
 

@@ -85,7 +85,7 @@ def db_migrate(ctx: click.Context, dry_run: bool) -> None:
         cmd.extend(["--sql"])
         console.print(f"[dim]Сайт: {site_dir.name} (сухе запущення)[/dim]\n")
         result = subprocess.run(cmd, cwd=str(site_dir), env=env)
-        console.print(f"\n[yellow]![/yellow] Це лише показ. Для застосування запусти без [cyan]--dry-run[/cyan]")
+        console.print("\n[yellow]![/yellow] Це лише показ. Для застосування запусти без [cyan]--dry-run[/cyan]")
         sys.exit(result.returncode)
 
     console.print(f"[dim]Сайт: {site_dir.name}[/dim]")

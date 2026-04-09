@@ -2,79 +2,80 @@
 
 Command-line interface for managing [Grunt Framework](https://github.com/GruntUA/Grunt) projects and applications.
 
+## Requirements
+
+### 1. Install Git and mise
+
+If you don't have them yet, install **Git** and **[mise](https://mise.jdx.dev/)**:
+
+```bash
+# Install Curl (Ubuntu/Debian)
+sudo apt update && sudo apt install curl -y
+
+# Install Git (Ubuntu/Debian)
+sudo apt update && sudo apt install git -y
+
+# Install mise
+curl https://mise.jdx.dev/install.sh | sh
+```
+
+### 2. Managed Dependencies
+
+Mise will automatically install and manage:
+- **Python 3.12**
+- **Node.js**
+- **uv**
+
 ## Installation
 
-### Quick install (recommended)
+### 1. Install Grunt CLI
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/GruntUA/grunt-cli/master/install.sh | bash
-```
-
-The script will:
-- Check for Python 3.12+ and Git
-- Clone the repository to `~/.grunt-cli`
-- Create a virtual environment and install dependencies
-- Add `grunt` symlink to `~/.local/bin`
-
-You can set a custom install path via `GRUNT_CLI_DIR`:
-
-```bash
-GRUNT_CLI_DIR=~/my-path curl -fsSL https://raw.githubusercontent.com/GruntUA/grunt-cli/master/install.sh | bash
-```
-
-### Via pip
-
-```bash
-pip install grunt-cli
-```
-
-### From source
+Clone the repository and use `mise` to set up the environment and install the CLI globally:
 
 ```bash
 git clone https://github.com/GruntUA/grunt-cli.git
 cd grunt-cli
-pip install -e .
+mise run install
 ```
 
-### Verify
-
+This installs `grunt-cli` as a global `uv tool`. Verify with:
 ```bash
 grunt --version
 ```
 
 ---
 
-## Quick start
+## Quick start: Running Grunt Framework
 
-Grunt CLI works standalone — no framework installation required upfront.
+Once the CLI is installed, follow these steps to set up a new Grunt project:
+
+### 1. Create a new site
+Create a local Grunt project (clones the framework and sets up the directory structure):
 
 ```bash
-# 1. Download the Grunt framework
-grunt app get https://github.com/GruntUA/Grunt
-
-# 2. Install it on a site
-grunt app install Grunt --site localhost
-
-# 3. Install any other custom app the same way
-grunt app get https://github.com/MyOrg/my-app
-grunt app install my-app --site dev.myproject.com
+grunt install my-site
+cd my-site
 ```
+
+### 2. Initialize the site
+Run database migrations and create an admin user:
+
+```bash
+grunt init
+```
+
+### 3. Start development servers
+Start the FastAPI backend and Vite frontend:
+
+```bash
+grunt serve
+```
+
+Your site should now be running at `http://localhost:8000`.
 
 ---
 
 ## Commands
-
-### `grunt install`
-
-Create a new local Grunt project (clones the framework, sets up directory structure).
-
-```bash
-grunt install [PROJECT_NAME]
-
-# Options:
-#   --repo    Git URL of the Grunt framework  (default: https://github.com/GruntUA/Grunt.git)
-#   --branch  Branch to clone                 (default: master)
-```
 
 ```bash
 grunt install my-site
@@ -214,6 +215,23 @@ Authentication for API-based commands.
 grunt auth login    # Log in and save token to ~/.grunt_token
 grunt auth logout   # Remove saved token
 grunt auth whoami   # Show current logged-in user
+```
+
+---
+
+## Development
+
+We use `mise` and `uv` for development.
+
+```bash
+# Set up environment
+mise install
+mise run dev
+
+# Run tests, lint, format
+mise run test
+mise run lint
+mise run fmt
 ```
 
 ---

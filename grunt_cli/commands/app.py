@@ -10,12 +10,18 @@ import httpx
 from rich import box
 from rich.table import Table
 
-from grunt_cli.helpers import DEFAULT_API, auth_headers, console, get_apps_dir, get_site_dir, resolve_site_api
+from grunt_cli.helpers import (
+    DEFAULT_API,
+    auth_headers,
+    console,
+    get_apps_dir,
+    get_site_dir,
+    resolve_site_api,
+)
 
 
-def _load_app_meta(app_dir: "Path") -> dict | None:
+def _load_app_meta(app_dir: Path) -> dict | None:
     """Завантажує метадані додатку з app.json або grunt_app.py."""
-    from pathlib import Path
 
     app_json = app_dir / "app.json"
     if app_json.exists():
@@ -54,6 +60,7 @@ def app_create(name: str, no_git: bool, dest: str | None) -> None:
       grunt app create my_crm --dest /tmp/apps
     """
     from pathlib import Path  # noqa: PLC0415
+
     from grunt_cli.utils.boilerplate import make_boilerplate  # noqa: PLC0415
 
     dest_path = Path(dest) if dest else get_apps_dir()

@@ -19,7 +19,6 @@ from grunt_cli.helpers import (
     save_token,
 )
 
-
 _DB_CHOICES = {
     "sqlite": {
         "label": "SQLite (локальний файл, без сервера)",
@@ -158,7 +157,10 @@ def master(repo: str, branch: str) -> None:
         full_name = click.prompt("  Повне ім'я", default="Адміністратор")
 
         # Для реєстрації потрібен працюючий сервер — запускаємо тимчасово
-        import subprocess, sys, time, os  # noqa: E401
+        import os
+        import subprocess  # noqa: E401
+        import sys
+        import time
 
         venv_bin = venv_dir / "bin"
         python_exe = str(venv_bin / "python") if (venv_bin / "python").exists() else sys.executable
@@ -248,9 +250,9 @@ def master(repo: str, branch: str) -> None:
 
     if click.confirm("Запустити dev сервер зараз?", default=True):
         console.print()
-        from grunt_cli.commands.serve import serve as serve_cmd
-
         import os
+
+        from grunt_cli.commands.serve import serve as serve_cmd
         os.chdir(str(project_dir))
         ctx = click.Context(serve_cmd, info_name="serve")
         ctx.invoke(serve_cmd, host="0.0.0.0", port=port, no_reload=False, backend_only=False, frontend_only=False)

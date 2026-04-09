@@ -17,7 +17,6 @@ from grunt_cli.helpers import (
     token_file,
 )
 
-
 # ── resolve_site_api ────────────────────────────────────────────
 
 

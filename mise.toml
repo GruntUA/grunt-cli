@@ -1,0 +1,31 @@
+[tools]
+python = "3.12"
+node = "20"
+uv = "latest"
+
+[tasks.install]
+description = "Install Grunt CLI globally as a uv tool"
+run = "uv tool install --editable . --force"
+
+[tasks.dev]
+description = "Setup development environment"
+run = "uv sync --all-extras"
+
+[tasks.test]
+description = "Run tests"
+run = "uv run pytest"
+depends = ["dev"]
+
+[tasks.lint]
+description = "Run linter"
+run = "uv run ruff check ."
+depends = ["dev"]
+
+[tasks.fmt]
+description = "Format code"
+run = "uv run ruff format ."
+depends = ["dev"]
+
+[tasks.build]
+description = "Build the package"
+run = "uv build"
