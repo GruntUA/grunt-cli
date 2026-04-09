@@ -149,7 +149,7 @@ def auth_headers() -> dict[str, str]:
 # Dependency installation helpers
 # ---------------------------------------------------------------------------
 
-def run_mise(cwd: Path, *args: str) -> bool:
+def run_mise(cwd: Path, *args: str, env: dict[str, str] | None = None) -> bool:
     """Виконує команду mise у вказаній директорії.
     Автоматично виконує 'mise trust' перед запуском.
     """
@@ -165,16 +165,15 @@ def run_mise(cwd: Path, *args: str) -> bool:
     subprocess.run([str(mise_bin), "trust"], cwd=str(cwd), capture_output=True)
 
     # 2. Run
-    # Якщо перший аргумент це задача (не містить двокрапки або відома як задача), 
-    # mise потребує 'run', але ми можемо передавати 'run' явно або неявно.
-    # Для надійності використовуємо 'run' для задач.
     cmd = [str(mise_bin)]
-    if args and args[0] in {"install", "setup", "test", "lint", "fmt", "build"}:
+    # Якщо це відома задача, додаємо 'run'
+    if args and args[0] in {"install", "setup", "test", "lint", "fmt", "build", "db:migrate"}:
          cmd.extend(["run"])
     
     cmd.extend(args)
 
-    result = subprocess.run(cmd, cwd=str(cwd))
+    final_env = {**os.environ, **(env or {})}
+    result = subprocess.run(cmd, cwd=str(cwd), env=final_env)
     return result.returncode == 0
 
 

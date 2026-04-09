@@ -120,7 +120,11 @@ def _init_site() -> None:
     backend_dir = grunt_dir / "backend"
     if backend_dir.exists():
         console.print("[dim]Застосовую міграції...[/dim]")
-        run_mise(site_dir, "db:migrate")
+        run_mise(
+            grunt_dir, 
+            "db:migrate", 
+            env={"DOTENV_PATH": str(site_dir / ".env")}
+        )
 
     # 3. Адміністратор
     console.print()

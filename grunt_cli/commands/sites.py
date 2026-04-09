@@ -91,7 +91,11 @@ def sites_new(name: str, db_url: str | None, no_migrate: bool) -> None:
     if not no_migrate:
         grunt_dir = bench_dir / "apps" / "grunt"
         console.print("[dim]Застосовую міграції...[/dim]")
-        run_mise(site_dir, "db:migrate")
+        run_mise(
+            grunt_dir, 
+            "db:migrate", 
+            env={"DOTENV_PATH": str(site_dir / ".env")}
+        )
 
     # Встановлюємо як активний
     (sites_dir / "currentsite.txt").write_text(name)
