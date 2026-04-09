@@ -20,7 +20,6 @@ def sites() -> None:
 # grunt sites list
 # ---------------------------------------------------------------------------
 
-@sites.command("list")
 def sites_list() -> None:
     """Показує список сайтів."""
     bench = get_bench_dir()
@@ -29,16 +28,8 @@ def sites_list() -> None:
         _list_bench_sites(bench)
         return
 
-    site_dir = get_site_dir()
-    if site_dir is not None:
-        console.print(f"  [bold cyan]{site_dir.name}[/bold cyan]  (flat)")
-        console.print(f"    Шлях: {site_dir}")
-        _print_site_info(site_dir)
-        return
-
-    console.print("[dim]Сайтів не знайдено.[/dim]")
-    console.print("  [cyan]grunt install <name>[/cyan]    створити flat-сайт")
-    console.print("  [cyan]grunt init <name>[/cyan]       створити bench")
+    console.print("[dim]Bench не знайдено.[/dim]")
+    console.print("  [cyan]grunt install <name>[/cyan]    створити новий bench")
 
 
 # ---------------------------------------------------------------------------

@@ -81,27 +81,23 @@ def _init_bench(name: str, repo: str, branch: str) -> None:
 def _init_site() -> None:
     bench_dir = get_bench_dir()
 
-    if bench_dir is not None:
-        site_dir = get_current_site()
-        if site_dir is None:
-            console.print(
-                "[red]✗[/red] Немає активного сайту. "
-                "Запусти [cyan]grunt sites use <site>[/cyan] або [cyan]grunt sites new <name>[/cyan]"
-            )
-            raise SystemExit(1)
-        grunt_dir = bench_dir / "apps" / "grunt"
-        venv_dir = bench_dir / ".venv"
-        console.print(f"[dim]Сайт: {site_dir.name}[/dim]")
-    else:
-        site_dir = get_site_dir()
-        if site_dir is None or not (site_dir / "grunt.site").exists():
-            console.print(
-                "[red]✗[/red] grunt.site не знайдено. "
-                "Спочатку запусти [cyan]grunt install <назва>[/cyan] або [cyan]grunt init <назва>[/cyan]"
-            )
-            raise SystemExit(1)
-        grunt_dir = site_dir / "apps" / "grunt"
-        venv_dir = site_dir / ".venv"
+    if bench_dir is None:
+        console.print(
+            "[red]✗[/red] Bench не знайдено. "
+            "Спочатку створи проект: [cyan]grunt install <name>[/cyan]"
+        )
+        raise SystemExit(1)
+
+    site_dir = get_current_site()
+    if site_dir is None:
+        console.print(
+            "[red]✗[/red] Немає активного сайту. "
+            "Запусти [cyan]grunt sites use <site>[/cyan] або [cyan]grunt sites new <name>[/cyan]"
+        )
+        raise SystemExit(1)
+
+    grunt_dir = bench_dir / "apps" / "grunt"
+    console.print(f"[dim]Сайт: {site_dir.name}[/dim]")
 
     # 1. SECRET_KEY
     env_file = site_dir / ".env"

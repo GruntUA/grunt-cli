@@ -20,39 +20,46 @@ from grunt_cli.helpers import (
 @click.option("--repo", default=GRUNT_REPO_URL, show_default=True, help="URL репозиторію Grunt")
 @click.option("--branch", default="master", show_default=True, help="Гілка для клонування")
 def install(project_name: str, repo: str, branch: str) -> None:
-    """Встановлює Grunt framework у нову директорію (flat-структура).
+    """Встановлює Grunt framework у нову директорію (bench-структура).
 
     \b
       <project_name>/
         apps/
           grunt/          ← фреймворк
-        grunt.site        ← маркер-файл сайту
-        .env              ← конфігурація
-
-    Для мультисайтової структури використовуй: grunt bench init
+        sites/
+          default/        ← перший сайт
+            grunt.site    ← маркер-файл
+            .env          ← конфігурація
     """
-    site_dir = Path(project_name).resolve()
+    bench_dir = Path(project_name).resolve()
 
-    if site_dir.exists() and any(site_dir.iterdir()):
+    if bench_dir.exists() and any(bench_dir.iterdir()):
         console.print(f"[red]✗[/red] Директорія '{project_name}' вже існує і не порожня")
         raise SystemExit(1)
 
-    site_dir.mkdir(parents=True, exist_ok=True)
+    bench_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Структура
-    apps_dir = site_dir / "apps"
+    apps_dir = bench_dir / "apps"
     apps_dir.mkdir(exist_ok=True)
+    sites_dir = bench_dir / "sites"
+    sites_dir.mkdir(exist_ok=True)
+
+    # Перший сайт
+    site_dir = sites_dir / "default"
+    site_dir.mkdir(parents=True, exist_ok=True)
 
     # 2. Клонуємо Grunt
     grunt_dir = clone_grunt(apps_dir, repo, branch)
 
-    # 3. grunt.site
+    # 3. grunt.site (відносні шляхи до apps і grunt)
     site_config = {
-        "framework_path": "apps/grunt",
-        "apps_path": "apps",
+        "framework_path": "../../apps/grunt",
+        "apps_path": "../../apps",
         "installed_apps": ["grunt"],
     }
     (site_dir / "grunt.site").write_text(json.dumps(site_config, ensure_ascii=False, indent=2))
+    (sites_dir / "currentsite.txt").write_text("default")
 
     # 4. .env
     env_content = (
@@ -63,11 +70,11 @@ def install(project_name: str, repo: str, branch: str) -> None:
     (site_dir / ".env").write_text(env_content)
 
     # 5. Встановлення всього через mise
-    run_mise(site_dir, "install")
+    run_mise(bench_dir, "install")
 
     # Фінал
     console.print()
-    console.print(f"[bold green]✅ Grunt встановлено у {site_dir}[/bold green]")
+    console.print(f"[bold green]✅ Grunt встановлено у {bench_dir}[/bold green]")
     console.print()
     console.print("Наступні кроки:")
     console.print(f"  [cyan]cd {project_name}[/cyan]")

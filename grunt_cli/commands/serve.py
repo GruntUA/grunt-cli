@@ -50,15 +50,12 @@ def serve(
 ) -> None:
     """Запускає dev сервери (backend + frontend)."""
     bench_dir = get_bench_dir()
-    site_dir = get_site_dir()
-
-    if bench_dir is not None:
-        _serve_bench(bench_dir, host, port, no_reload, backend_only, frontend_only)
-    elif site_dir is not None:
-        _serve_flat(site_dir, host, port, no_reload, backend_only, frontend_only)
-    else:
-        console.print("[red]✗[/red] grunt.site не знайдено. Перейди у директорію Grunt-проекту.")
+    
+    if bench_dir is None:
+        console.print("[red]✗[/red] Bench не знайдено. Перейди у директорію Grunt-проекту.")
         raise SystemExit(1)
+
+    _serve_bench(bench_dir, host, port, no_reload, backend_only, frontend_only)
 
 
 def _serve_bench(
@@ -145,64 +142,6 @@ def _serve_bench(
     _wait_for_procs(procs, shutdown)
 
 
-def _serve_flat(
-    site_dir: Path, host: str, port: int, no_reload: bool, backend_only: bool, frontend_only: bool,
-) -> None:
-    """Запуск серверів у flat-режимі (один сайт)."""
-    grunt_dir = site_dir / "apps" / "grunt"
-    backend_dir = grunt_dir / "backend"
-
-    if not grunt_dir.exists():
-        console.print(f"[red]✗[/red] Grunt framework не знайдено: {grunt_dir}")
-        raise SystemExit(1)
-
-    # Python exe
-    site_venv = site_dir / ".venv" / "bin" / "python"
-    python_exe = str(site_venv) if site_venv.exists() else sys.executable
-
-    # Env
-    backend_env = {**os.environ}
-    env_file = site_dir / ".env"
-    if env_file.exists():
-        backend_env["DOTENV_PATH"] = str(env_file)
-
-    procs: list[subprocess.Popen] = []
-
-    def shutdown(sig=None, frame=None):
-        console.print("\n[dim]Зупиняю сервери...[/dim]")
-        for p in procs:
-            p.terminate()
-        sys.exit(0)
-
-    signal.signal(signal.SIGINT, shutdown)
-    signal.signal(signal.SIGTERM, shutdown)
-
-    # Free ports from stale processes
-    if not frontend_only:
-        _kill_port(port)
-    if not backend_only:
-        _kill_port(5173)
-
-    if not frontend_only and backend_dir.exists():
-        backend_args = ["x", "--", "python", "-m", "uvicorn", "grunt.main:app", "--host", host, "--port", str(port)]
-        if not no_reload:
-            backend_args.extend(["--reload", "--reload-dir", str(backend_dir)])
-
-        console.print(f"[green]▶[/green] Backend:  http://{host}:{port}")
-        console.print(f"  [dim]API docs: http://localhost:{port}/docs[/dim]")
-        console.print(f"  [dim]Site:     {site_dir}[/dim]")
-
-        procs.append(run_mise_popen(
-            site_dir,
-            *backend_args,
-            env={**backend_env, "PYTHONPATH": str(backend_dir)},
-            config_file=grunt_dir / "mise.toml"
-        ))
-
-    if not backend_only:
-        _start_frontend(procs, grunt_dir, site_dir)
-
-    _wait_for_procs(procs, shutdown)
 
 
 def _start_frontend(procs: list, grunt_dir: Path, node_base_dir: Path) -> None:
