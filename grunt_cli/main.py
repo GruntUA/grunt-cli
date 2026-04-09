@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import sys
+
 from importlib.metadata import entry_points
 
 import click
@@ -13,6 +16,11 @@ from grunt_cli import __version__
 @click.version_option(version=__version__, prog_name="Ґрунт CLI")
 def cli() -> None:
     """⚡ Ґрунт CLI — встановлення та управління Grunt-проєктами."""
+    try:
+        os.getcwd()
+    except FileNotFoundError:
+        click.echo("Помилка: Поточна директорія не існує. Спробуйте виконати 'cd .'", err=True)
+        sys.exit(1)
 
 
 from grunt_cli.commands.app import app  # noqa: E402

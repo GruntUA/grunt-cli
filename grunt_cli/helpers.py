@@ -149,21 +149,20 @@ def run_mise(cwd: Path, *args: str, env: dict[str, str] | None = None, config_fi
         return False
 
     # Trust
-    trust_cmd = [str(mise_bin)]
+    trust_cmd = [str(mise_bin), "trust"]
     if config_file:
-        trust_cmd.extend(["--config", str(config_file)])
-    trust_cmd.append("trust")
+        trust_cmd.append(str(config_file))
     subprocess.run(trust_cmd, cwd=str(cwd), capture_output=True)
 
     cmd = [str(mise_bin)]
-    if config_file:
-        cmd.extend(["--config", str(config_file)])
-    
-    if args and args[0] in {"setup", "test", "lint", "fmt", "build", "db:migrate", "serve", "dev"}:
+    if args and args[0] in {"setup", "test", "lint", "fmt", "build", "db:migrate", "serve", "dev", "bootstrap"}:
          cmd.extend(["run"])
     cmd.extend(args)
 
     final_env = {**os.environ, **(env or {})}
+    if config_file:
+        final_env["MISE_CONFIG_FILE"] = str(config_file)
+
     result = subprocess.run(cmd, cwd=str(cwd), env=final_env)
     return result.returncode == 0
 
@@ -173,21 +172,20 @@ def run_mise_popen(cwd: Path, *args: str, env: dict[str, str] | None = None, con
     mise_bin = get_mise_bin() or "mise"
     
     # Trust
-    trust_cmd = [str(mise_bin)]
+    trust_cmd = [str(mise_bin), "trust"]
     if config_file:
-        trust_cmd.extend(["--config", str(config_file)])
-    trust_cmd.append("trust")
+        trust_cmd.append(str(config_file))
     subprocess.run(trust_cmd, cwd=str(cwd), capture_output=True)
 
     cmd = [str(mise_bin)]
-    if config_file:
-        cmd.extend(["--config", str(config_file)])
-
     if args and args[0] in {"setup", "test", "lint", "fmt", "build", "db:migrate", "serve", "dev"}:
          cmd.extend(["run"])
     cmd.extend(args)
 
     final_env = {**os.environ, **(env or {})}
+    if config_file:
+        final_env["MISE_CONFIG_FILE"] = str(config_file)
+
     return subprocess.Popen(cmd, cwd=str(cwd), env=final_env, **kwargs)
 
 
