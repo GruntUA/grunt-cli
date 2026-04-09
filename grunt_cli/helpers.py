@@ -159,7 +159,7 @@ def run_mise(cwd: Path, *args: str, env: dict[str, str] | None = None, config_fi
     if config_file:
         cmd.extend(["--config", str(config_file)])
     
-    if args and args[0] in {"install", "setup", "test", "lint", "fmt", "build", "db:migrate", "serve", "dev"}:
+    if args and args[0] in {"setup", "test", "lint", "fmt", "build", "db:migrate", "serve", "dev"}:
          cmd.extend(["run"])
     cmd.extend(args)
 
@@ -183,7 +183,7 @@ def run_mise_popen(cwd: Path, *args: str, env: dict[str, str] | None = None, con
     if config_file:
         cmd.extend(["--config", str(config_file)])
 
-    if args and args[0] in {"install", "setup", "test", "lint", "fmt", "build", "db:migrate", "serve", "dev"}:
+    if args and args[0] in {"setup", "test", "lint", "fmt", "build", "db:migrate", "serve", "dev"}:
          cmd.extend(["run"])
     cmd.extend(args)
 

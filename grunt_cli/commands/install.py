@@ -70,7 +70,7 @@ def install(project_name: str, repo: str, branch: str) -> None:
     (site_dir / ".env").write_text(env_content)
 
     # 5. Встановлення всього через mise
-    run_mise(bench_dir, "install")
+    run_mise(bench_dir, "install", config_file=grunt_dir / "mise.toml")
 
     # Фінал
     console.print()
