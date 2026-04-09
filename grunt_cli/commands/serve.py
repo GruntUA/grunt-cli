@@ -133,9 +133,10 @@ def _serve_bench(
 
         backend_cwd = active_site_dir if active_site_dir else grunt_dir
         procs.append(run_mise_popen(
-            backend_cwd,
+            active_site_dir if active_site_dir else grunt_dir,
             *backend_args,
             env=backend_env,
+            config_file=grunt_dir / "mise.toml"
         ))
 
     if not backend_only:
@@ -195,6 +196,7 @@ def _serve_flat(
             site_dir,
             *backend_args,
             env={**backend_env, "PYTHONPATH": str(backend_dir)},
+            config_file=grunt_dir / "mise.toml"
         ))
 
     if not backend_only:
@@ -210,7 +212,12 @@ def _start_frontend(procs: list, grunt_dir: Path, node_base_dir: Path) -> None:
         return
 
     console.print("[green]▶[/green] Frontend: http://localhost:5173")
-    procs.append(run_mise_popen(grunt_dir, "x", "--", "npm", "run", "dev", env=os.environ))
+    procs.append(run_mise_popen(
+        grunt_dir, 
+        "x", "--", "npm", "run", "dev", 
+        env=os.environ,
+        config_file=grunt_dir / "mise.toml"
+    ))
 
 
 def _wait_for_procs(procs: list, shutdown) -> None:

@@ -10,7 +10,13 @@ from pathlib import Path
 
 import click
 
-from grunt_cli.helpers import console, run_mise
+from grunt_cli.helpers import (
+    console,
+    find_uv,
+    get_bench_dir,
+    get_site_dir,
+    run_mise,
+)
 
 
 def _git_pull(path: Path, label: str) -> bool:
@@ -73,26 +79,18 @@ def _install_deps(path: Path, label: str) -> None:
 
 
 def _find_bench_dir() -> Path | None:
-    """Шукає кореневу директорію bench-проєкту (містить apps/ та sites/)."""
-    cwd = Path.cwd()
-    for parent in [cwd, *cwd.parents]:
-        if (parent / "apps").is_dir() and (parent / "sites").is_dir():
-            return parent
-        # Якщо ми всередині apps/grunt або apps/*
-        if parent.name == "apps" and parent.parent is not None:
-            bench = parent.parent
-            if (bench / "sites").is_dir():
-                return bench
-    return None
+    """Шукає кореневу директорію bench-проєкту."""
+    return get_bench_dir()
 
 
 def _find_apps_dir() -> Path | None:
-    """Повертає директорію apps/ для bench-структури."""
-    bench = _find_bench_dir()
-    if bench is not None:
-        apps_dir = bench / "apps"
-        if apps_dir.is_dir():
-            return apps_dir
+    """Повертає директорію apps/."""
+    bench = get_bench_dir()
+    if bench:
+        return bench / "apps"
+    site = get_site_dir()
+    if site and (site / "apps").is_dir():
+        return site / "apps"
     return None
 
 
