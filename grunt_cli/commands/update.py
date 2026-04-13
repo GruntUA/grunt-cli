@@ -74,8 +74,17 @@ def _git_pull(path: Path, label: str) -> bool:
 
 def _install_deps(path: Path, label: str) -> None:
     """Встановлює залежності через mise."""
-    console.print(f"  [dim]Оновлюю залежності для {label}...[/dim]")
+    console.print(f"  [dim]Оновлюю рантайми для {label}...[/dim]")
     run_mise(path, "install")
+
+    mise_toml = path / "mise.toml"
+    if mise_toml.exists():
+        import tomllib  # noqa: PLC0415
+        with mise_toml.open("rb") as f:
+            tasks = tomllib.load(f).get("tasks", {})
+        if "deps" in tasks:
+            console.print(f"  [dim]Встановлюю пакети для {label} (mise run deps)...[/dim]")
+            run_mise(path, "deps")
 
 
 def _find_bench_dir() -> Path | None:
