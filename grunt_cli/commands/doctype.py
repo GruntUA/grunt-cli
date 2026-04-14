@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -647,6 +648,154 @@ def doctype_sync(name: str, api: str) -> None:
         console.print(f"  Додано колонки: {', '.join(added)}")
     else:
         console.print("  [dim]Змін у схемі не було[/dim]")
+
+
+@doctype.command("apply")
+@click.argument("names", nargs=-1, metavar="[NAME...]")
+@click.option("--app", default=None, help="Застосувати всі DocTypes з вказаного додатку")
+@click.option("--all", "all_apps", is_flag=True, help="Застосувати всі DocTypes з усіх додатків")
+@click.option("--site", default=None, help="Назва сайту")
+def doctype_apply(names: tuple[str, ...], app: str | None, all_apps: bool, site: str | None) -> None:
+    """Застосувати DocType JSON з диска прямо в БД — без HTTP і авторизації.
+
+    Реєструє нові DocTypes і оновлює існуючі разом із синхронізацією схеми таблиці.
+    Запускається через venv проекту — сервер не потрібен.
+
+    \b
+    Приклади:
+      grunt doctype apply InfraObjectType MltMap
+      grunt doctype apply --app int_map
+      grunt doctype apply --all
+    """
+    import os  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+
+    from grunt_cli.helpers import get_bench_dir, get_current_site, get_site_dir  # noqa: PLC0415
+
+    bench_dir = get_bench_dir()
+    if bench_dir:
+        site_dir = (
+            (bench_dir / "sites" / site) if site
+            else get_current_site()
+        )
+        backend_dir = bench_dir / "apps" / "grunt" / "backend"
+        venv_dir = bench_dir / ".venv"
+        apps_root = bench_dir / "apps"
+    else:
+        site_dir = get_site_dir()
+        backend_dir = Path.cwd() / "apps" / "grunt" / "backend"
+        venv_dir = Path.cwd() / ".venv"
+        apps_root = Path.cwd() / "apps"
+
+    if not site_dir:
+        console.print("[red]✗[/red] Сайт не знайдено")
+        raise SystemExit(1)
+
+    # Collect JSON files
+    json_files: list[Path] = []
+
+    if names:
+        for name in names:
+            matches = list(apps_root.glob(f"**/{name}/{name}.json"))
+            if not matches:
+                console.print(f"  [yellow]![/yellow] {name}: JSON не знайдено в {apps_root}")
+            else:
+                json_files.extend(matches)
+    elif app:
+        app_path = apps_root / app
+        if not app_path.exists():
+            console.print(f"[red]✗[/red] Додаток '{app}' не знайдено в {apps_root}")
+            raise SystemExit(1)
+        json_files.extend(sorted(app_path.glob("**/doctypes/*/*.json")))
+    elif all_apps:
+        json_files.extend(sorted(apps_root.glob("**/doctypes/*/*.json")))
+    else:
+        console.print("[red]✗[/red] Вкажи [cyan]NAME[/cyan], [cyan]--app APP[/cyan] або [cyan]--all[/cyan]")
+        raise SystemExit(1)
+
+    if not json_files:
+        console.print("[yellow]Нічого застосовувати[/yellow]")
+        return
+
+    # Build inline Python script executed in the grunt venv
+    json_paths_repr = repr([str(p) for p in json_files])
+    script = f"""
+import asyncio, json, sys
+from pathlib import Path
+from sqlalchemy import update as sa_update
+from grunt.core.db.system_tables import GruntMetaDoctype
+from grunt.core.metadata.compiler import sync_table
+from grunt.core.metadata.doctype import DocType
+from grunt.core.metadata.registry import doctype_registry
+from grunt.core.site.manager import current_site, site_manager
+from grunt.core.startup import load_core_doctypes
+
+async def main():
+    sites = site_manager.get_sites()
+    target = sites[0] if sites else None
+    if not target:
+        print("ERROR: no sites found"); sys.exit(1)
+    token = current_site.set(target)
+    try:
+        eng = site_manager.get_engine(target)
+        maker = site_manager.get_session_maker(target)
+        json_files = {json_paths_repr}
+        registered = updated = errors = 0
+        async with maker() as session:
+            await doctype_registry.load_all(session)
+            await load_core_doctypes(session, eng)
+            for path in json_files:
+                dt_name = Path(path).stem
+                try:
+                    dt_data = json.loads(Path(path).read_text(encoding="utf-8"))
+                    dt_obj = DocType.model_validate(dt_data)
+                    if dt_name in doctype_registry._doctypes:
+                        await session.execute(
+                            sa_update(GruntMetaDoctype)
+                            .where(GruntMetaDoctype.name == dt_name)
+                            .values(module=dt_obj.module, data=dt_obj.model_dump(mode="json"))
+                        )
+                        doctype_registry._doctypes[dt_name] = dt_obj
+                        await sync_table(dt_obj, eng, session=session)
+                        await session.flush()
+                        print(f"  ~ {{dt_name}}: оновлено")
+                        updated += 1
+                    else:
+                        await doctype_registry.register(dt_obj, session, eng)
+                        await session.flush()
+                        print(f"  + {{dt_name}}: зареєстровано")
+                        registered += 1
+                except Exception as e:
+                    print(f"  ! {{dt_name}}: {{e}}", file=sys.stderr)
+                    errors += 1
+            await session.commit()
+        parts = []
+        if registered: parts.append(f"{{registered}} зареєстровано")
+        if updated:    parts.append(f"{{updated}} оновлено")
+        if errors:     parts.append(f"{{errors}} помилок")
+        print("\\n" + ", ".join(parts) if parts else "\\nЗмін не було")
+    finally:
+        current_site.reset(token)
+
+asyncio.run(main())
+"""
+
+    python_bin = venv_dir / "bin" / "python"
+    env = {
+        **os.environ,
+        "DOTENV_PATH": str(site_dir / ".env"),
+        "PYTHONPATH": str(backend_dir),
+        "VIRTUAL_ENV": str(venv_dir),
+        "PATH": str(venv_dir / "bin") + os.pathsep + os.environ.get("PATH", ""),
+    }
+
+    result = subprocess.run(
+        [str(python_bin), "-c", script],
+        env=env,
+        cwd=str(bench_dir or Path.cwd()),
+    )
+    sys.exit(result.returncode)
 
 
 @doctype.command("scaffold")

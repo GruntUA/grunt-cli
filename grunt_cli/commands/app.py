@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from pathlib import Path
 
 import click
 import httpx
@@ -95,83 +96,61 @@ def app_get(repo_url: str, branch: str | None) -> None:
 
 @app.command("install")
 @click.argument("name")
-@click.option("--site", default=None, help="Ім'я локального сайту або URL (напр. my-site, localhost, dev.example.com)", metavar="SITE")
+@click.option("--site", default=None, help="Ім'я сайту (за замовчуванням: автовизначення)", metavar="SITE")
 def app_install(name: str, site: str | None) -> None:
-    """Встановити додаток на сайт.
+    """Встановити додаток: DocTypes, fixtures, workspace, after_install.
 
     \b
     Приклади:
-      grunt app install cnap --site my-site     (локальний сайт)
-      grunt app install cnap                    (автовизначення)
-      grunt app install cnap --site localhost    (через API)
+      grunt app install int_map
+      grunt app install int_map --site my-site
     """
-    from grunt_cli.helpers import get_bench_dir
+    import os  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    import sys  # noqa: PLC0415
 
-    apps_dir = get_apps_dir()
+    from grunt_cli.helpers import get_bench_dir  # noqa: PLC0415
+
+    bench = get_bench_dir()
+    if bench is None:
+        console.print("[red]✗[/red] Bench не знайдено. Запустіть у папці проєкту.")
+        raise SystemExit(1)
+
+    apps_dir = bench / "apps"
     app_dir = apps_dir / name
-
     if not app_dir.exists():
         console.print(f"[red]✗[/red] Додаток '{name}' не знайдено в {apps_dir}")
         console.print("  Спочатку завантаж додаток: [cyan]grunt app get <repo_url>[/cyan]")
         raise SystemExit(1)
 
-    app_data = _load_app_meta(app_dir)
-    if app_data is None:
-        console.print(f"[red]✗[/red] Не знайдено app.json або grunt_app.py в {app_dir}")
+    backend_dir = bench / "apps" / "grunt" / "backend"
+    if not backend_dir.exists():
+        console.print(f"[red]✗[/red] Grunt framework не знайдено: {backend_dir}")
         raise SystemExit(1)
 
-    # Визначаємо site_dir: якщо --site — ім'я локального сайту, шукаємо в bench/sites/
-    resolved_site_dir = None
-    bench = get_bench_dir()
+    # Знаходимо Python у venv bench
+    python_exe = str(bench / ".venv" / "bin" / "python")
+    if not Path(python_exe).exists():
+        python_exe = sys.executable
 
-    if site is not None and bench is not None:
-        local_site = bench / "sites" / site
-        if local_site.is_dir() and (local_site / "grunt.site").exists():
-            resolved_site_dir = local_site
+    # Знаходимо site dir для cwd
+    from grunt_cli.commands.shell import _resolve_site_dir  # noqa: PLC0415
+    cwd = _resolve_site_dir(bench, site)
 
-    # Якщо --site не вказано або вказано але це не локальний сайт — шукаємо автоматично
-    if resolved_site_dir is None and site is None:
-        resolved_site_dir_maybe = get_site_dir()
-        if resolved_site_dir_maybe is not None:
-            resolved_site_dir = resolved_site_dir_maybe
+    env = {**os.environ, "PYTHONPATH": str(backend_dir)}
+    env_file = Path(cwd) / ".env"
+    if env_file.exists():
+        env["DOTENV_PATH"] = str(env_file)
 
-    # Якщо знайшли локальний сайт — встановлюємо локально (без API)
-    if resolved_site_dir is not None:
-        site_file = resolved_site_dir / "grunt.site"
-        site_config = json.loads(site_file.read_text())
-        installed = site_config.get("installed_apps", [])
-        if name in installed:
-            console.print(f"[yellow]![/yellow] Додаток '{name}' вже встановлено на {resolved_site_dir.name}")
-            return
-        installed.append(name)
-        site_config["installed_apps"] = installed
-        site_file.write_text(json.dumps(site_config, ensure_ascii=False, indent=2))
-        console.print(f"[green]✓[/green] Додаток [bold]{name}[/bold] встановлено на сайт [cyan]{resolved_site_dir.name}[/cyan]")
-        console.print(f"  [dim]Додатки: {', '.join(installed)}[/dim]")
-        return
+    site_arg = f", site={site!r}" if site else ""
+    startup = (
+        f"import asyncio; "
+        f"from grunt.cli.app import _do_install; "
+        f"asyncio.run(_do_install({name!r}{site_arg}))"
+    )
 
-    # Fallback: встановлення через API (remote site)
-    if site is not None:
-        base_api = resolve_site_api(site)
-    else:
-        base_api = DEFAULT_API
-
-    try:
-        resp = httpx.post(
-            f"{base_api}/api/v1/apps/",
-            headers=auth_headers(),
-            json=app_data,
-            timeout=10.0,
-        )
-        if resp.status_code == 409:
-            console.print(f"[yellow]![/yellow] Додаток '{name}' вже встановлено")
-            return
-        resp.raise_for_status()
-    except httpx.ConnectError:
-        console.print(f"[red]✗[/red] Не можу підключитись до {base_api}")
-        raise SystemExit(1)
-
-    console.print(f"[green]✓[/green] Додаток [bold]{name}[/bold] встановлено на {base_api}")
+    result = subprocess.run([python_exe, "-c", startup], env=env, cwd=cwd)
+    raise SystemExit(result.returncode)
 
 
 @app.command("uninstall")
