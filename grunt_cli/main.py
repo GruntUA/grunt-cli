@@ -35,6 +35,7 @@ from grunt_cli.commands.serve import serve  # noqa: E402
 from grunt_cli.commands.shell import shell  # noqa: E402
 from grunt_cli.commands.sites import sites  # noqa: E402
 from grunt_cli.commands.test import test  # noqa: E402
+from grunt_cli.commands.migrate import migrate  # noqa: E402
 from grunt_cli.commands.update import update  # noqa: E402
 from grunt_cli.commands.users import users  # noqa: E402
 
@@ -46,6 +47,7 @@ cli.add_command(doctype)
 cli.add_command(auth)
 cli.add_command(users)
 cli.add_command(app)
+cli.add_command(migrate)
 cli.add_command(update)
 cli.add_command(sites)
 cli.add_command(test)

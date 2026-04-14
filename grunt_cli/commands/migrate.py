@@ -1,0 +1,148 @@
+"""grunt migrate — синхронізувати схему БД та метадані DocType з JSON-файлів."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import click
+
+from grunt_cli.helpers import console, get_bench_dir, get_current_site, get_site_dir
+
+
+def _resolve_context(site_name: str | None) -> tuple[Path, Path, dict]:
+    """Повертає (framework_dir, site_dir, env)."""
+    bench_dir = get_bench_dir()
+
+    if bench_dir is not None:
+        if site_name:
+            site_dir = bench_dir / "sites" / site_name
+            if not (site_dir / "grunt.site").exists():
+                console.print(f"[red]✗[/red] Сайт '{site_name}' не знайдено")
+                raise SystemExit(1)
+        else:
+            site_dir = get_current_site()
+            if site_dir is None:
+                console.print(
+                    "[red]✗[/red] Немає активного сайту. "
+                    "Вкажи [cyan]--site <name>[/cyan] або запусти [cyan]grunt use <site>[/cyan]"
+                )
+                raise SystemExit(1)
+        framework_dir = bench_dir / "apps" / "grunt"
+        venv_dir = framework_dir / ".venv"
+    else:
+        site_dir = get_site_dir()
+        if site_dir is None:
+            console.print("[red]✗[/red] grunt.site не знайдено. Перейди у директорію Grunt-проекту.")
+            raise SystemExit(1)
+        framework_dir = Path.cwd()
+        venv_dir = framework_dir / ".venv"
+
+    venv_bin = venv_dir / "bin"
+    env = {
+        **os.environ,
+        "DOTENV_PATH": str(site_dir / ".env"),
+        "PYTHONPATH": str(framework_dir / "backend"),
+        "VIRTUAL_ENV": str(venv_dir),
+        "PATH": str(venv_bin) + os.pathsep + os.environ.get("PATH", ""),
+    }
+    return framework_dir, site_dir, env
+
+
+@click.command("migrate")
+@click.option("--site", "site_name", default=None, help="Цільовий сайт")
+def migrate(site_name: str | None) -> None:
+    """Синхронізувати схему БД та метадані DocType з JSON-файлів.
+
+    \b
+    Виконує два кроки:
+      1. Оновлює метадані DocType у БД (порівнює JSON-файли з записами в grunt_core_meta_doctype)
+         і додає нові колонки в таблиці (ALTER TABLE ADD COLUMN).
+      2. Застосовує alembic-міграції (upgrade head).
+
+    \b
+    Запускай після будь-яких змін у *.json файлах DocType або після git pull.
+    """
+    framework_dir, site_dir, env = _resolve_context(site_name)
+    venv_python = str(framework_dir / ".venv" / "bin" / "python")
+    if not Path(venv_python).exists():
+        venv_python = sys.executable
+
+    console.print(f"[dim]Сайт: {site_dir.name}[/dim]\n")
+
+    # ── 1. Sync DocType metadata ──────────────────────────────────────
+    console.print("[bold cyan][1/2] Синхронізація DocType метаданих[/bold cyan]")
+
+    sync_script = (
+        "import asyncio, logging; logging.disable(logging.CRITICAL)\n"
+        "import structlog; structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING))\n"
+        "from grunt.core.site.manager import current_site, site_manager\n"
+        "from grunt.core.db.base import Base\n"
+        "from grunt.core.metadata.registry import doctype_registry\n"
+        "from grunt.core.startup import load_core_doctypes, seed_app_workspaces\n"
+        "async def _sync():\n"
+        "    for site in site_manager.get_sites():\n"
+        "        token = current_site.set(site)\n"
+        "        try:\n"
+        "            eng = site_manager.get_engine(site)\n"
+        "            maker = site_manager.get_session_maker(site)\n"
+        "            async with eng.begin() as conn:\n"
+        "                await conn.run_sync(Base.metadata.create_all)\n"
+        "            async with maker() as session:\n"
+        "                await load_core_doctypes(session, eng)\n"
+        "                await doctype_registry.load_all(session)\n"
+        "                await seed_app_workspaces(session, site)\n"
+        "                await session.commit()\n"
+        "            print(f'  ✓ {site}')\n"
+        "        except Exception as e:\n"
+        "            print(f'  ✗ {site}: {e}')\n"
+        "        finally:\n"
+        "            current_site.reset(token)\n"
+        "asyncio.run(_sync())\n"
+    )
+
+    result = subprocess.run(
+        [venv_python, "-c", sync_script],
+        cwd=str(framework_dir),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    for line in result.stdout.splitlines():
+        if line.strip():
+            console.print(f"  {line.strip()}")
+
+    if result.returncode != 0:
+        console.print("[red]✗[/red] Помилка синхронізації DocType")
+        for line in result.stderr.splitlines():
+            if any(w in line for w in ("Error", "error", "Exception", "Traceback")):
+                console.print(f"  [dim red]{line.strip()}[/dim red]")
+        sys.exit(1)
+
+    console.print("[green]✓[/green] DocType метадані синхронізовано\n")
+
+    # ── 2. Alembic migrations ─────────────────────────────────────────
+    console.print("[bold cyan][2/2] Alembic міграції[/bold cyan]")
+
+    backend_dir = framework_dir / "backend"
+    alembic_ini = backend_dir / "alembic.ini"
+    alembic_bin = str(framework_dir / ".venv" / "bin" / "alembic")
+    if not Path(alembic_bin).exists():
+        import shutil  # noqa: PLC0415
+        alembic_bin = shutil.which("alembic") or "alembic"
+
+    result = subprocess.run(
+        [alembic_bin, "-c", str(alembic_ini), "upgrade", "head"],
+        cwd=str(framework_dir),
+        env=env,
+    )
+
+    if result.returncode != 0:
+        console.print("[red]✗[/red] Alembic міграція завершилась з помилкою")
+        sys.exit(result.returncode)
+
+    console.print("[green]✓[/green] Alembic міграції застосовано\n")
+    console.print("[bold green]✅ Міграція завершена[/bold green]")
