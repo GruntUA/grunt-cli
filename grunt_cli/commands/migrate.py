@@ -77,11 +77,13 @@ def migrate(site_name: str | None) -> None:
 
     sync_script = (
         "import asyncio, logging; logging.disable(logging.CRITICAL)\n"
-        "import structlog; structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING))\n"
+        "import structlog; structlog.configure("
+        "wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING))\n"
         "from grunt.core.site.manager import current_site, site_manager\n"
         "from grunt.core.db.base import Base\n"
         "from grunt.core.metadata.registry import doctype_registry\n"
-        "from grunt.core.startup import load_core_doctypes, seed_app_workspaces, sync_all_doctypes\n"
+        "from grunt.core.startup import ("
+        "load_core_doctypes, seed_app_workspaces, sync_all_doctypes)\n"
         "async def _sync():\n"
         "    for site in site_manager.get_sites():\n"
         "        token = current_site.set(site)\n"
