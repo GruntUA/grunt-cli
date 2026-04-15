@@ -169,8 +169,8 @@ def update(update_cli: bool, update_framework: bool, update_apps: bool, no_deps:
         if cli_dir is None:
             console.print("  [yellow]⚠[/yellow]  grunt-cli не встановлений як editable, пропускаю")
         else:
-            pulled = _git_pull(cli_dir, "grunt-cli")
-            if pulled and not no_deps:
+            _git_pull(cli_dir, "grunt-cli")
+            if not no_deps:
                 _install_deps(cli_dir, "grunt-cli")
             updated_something = True
         console.print()
@@ -184,8 +184,8 @@ def update(update_cli: bool, update_framework: bool, update_apps: bool, no_deps:
         if framework_dir is None or not framework_dir.exists():
             console.print("  [yellow]⚠[/yellow]  Grunt framework не знайдено")
         else:
-            pulled = _git_pull(framework_dir, "grunt")
-            if pulled and not no_deps:
+            _git_pull(framework_dir, "grunt")
+            if not no_deps:
                 _install_deps(framework_dir, "grunt")
             updated_something = True
         console.print()
@@ -207,8 +207,8 @@ def update(update_cli: bool, update_framework: bool, update_apps: bool, no_deps:
                 console.print("  [dim]Немає додатків з git-репозиторієм для оновлення[/dim]")
             else:
                 for app_dir in app_dirs:
-                    pulled = _git_pull(app_dir, app_dir.name)
-                    if pulled and not no_deps:
+                    _git_pull(app_dir, app_dir.name)
+                    if not no_deps:
                         _install_deps(app_dir, app_dir.name)
                     updated_something = True
         console.print()
