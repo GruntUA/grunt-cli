@@ -35,7 +35,7 @@ def _resolve_context(site_name: str | None) -> tuple[Path, Path, dict]:
     else:
         site_dir = get_site_dir()
         if site_dir is None:
-            console.print("[red]✗[/red] grunt.site не знайдено. Перейди у директорію Grunt-проекту.")
+            console.print("[red]✗[/red] grunt.site не знайдено. Увійдіть у директорію проекту.")
             raise SystemExit(1)
         framework_dir = Path.cwd()
         venv_dir = framework_dir / ".venv"
