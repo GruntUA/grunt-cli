@@ -182,7 +182,8 @@ def app_uninstall(name: str, site: str | None, yes: bool) -> None:
             resolved_site_dir = local_site
 
     if resolved_site_dir is None and site is None:
-        resolved_site_dir_maybe = get_site_dir()
+        from grunt_cli.helpers import get_current_site
+        resolved_site_dir_maybe = get_current_site()
         if resolved_site_dir_maybe is not None:
             resolved_site_dir = resolved_site_dir_maybe
 
