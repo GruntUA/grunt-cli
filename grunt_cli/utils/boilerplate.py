@@ -13,6 +13,7 @@ import subprocess
 from pathlib import Path
 
 import click
+from jinja2 import Template
 from rich.console import Console
 from rich.panel import Panel
 from rich.tree import Tree
@@ -68,7 +69,10 @@ def make_boilerplate(dest: Path, app_name: str, no_git: bool = False) -> None:
 
 def _prompt_validated(prompt_text: str, validator, error_msg: str, default: str | None = None) -> str:
     while True:
-        value = click.prompt(prompt_text, default=default) if default is not None else click.prompt(prompt_text)
+        if default is not None:
+            value = click.prompt(prompt_text, default=default)
+        else:
+            value = click.prompt(prompt_text)
         if validator(value):
             return value
         console.print(f"  [red]![/red] {error_msg}")
@@ -162,20 +166,18 @@ def _create_app_boilerplate(dest: Path, hooks: dict, no_git: bool = False) -> No
 
 
 def _write_grunt_app_py(app_dir: Path, module: str, h: dict) -> None:
-    (app_dir / "grunt_app.py").write_text(
-        grunt_app_template.format(
-            title=h["title"],
-            app_name=h["app_name"],
-            version=h["version"],
-            description=h["description"],
-            author=h["author"],
-            email=h["email"],
-            icon=h["icon"],
-            color=h["color"],
-            module=module,
-        ),
-        encoding="utf-8",
+    content = Template(grunt_app_template).render(
+        title=h["title"],
+        app_name=h["app_name"],
+        version=h["version"],
+        description=h["description"],
+        author=h["author"],
+        email=h["email"],
+        icon=h["icon"],
+        color=h["color"],
+        module=module,
     )
+    (app_dir / "grunt_app.py").write_text(content, encoding="utf-8")
 
 
 def _write_app_json(app_dir: Path, module: str, h: dict) -> None:
@@ -198,23 +200,22 @@ def _write_app_json(app_dir: Path, module: str, h: dict) -> None:
 
 
 def _write_install_py(app_dir: Path, h: dict) -> None:
-    (app_dir / "install.py").write_text(
-        install_template.format(title=h["title"], app_name=h["app_name"]),
-        encoding="utf-8",
+    content = Template(install_template).render(
+        title=h["title"],
+        app_name=h["app_name"],
     )
+    (app_dir / "install.py").write_text(content, encoding="utf-8")
 
 
 def _write_readme(app_dir: Path, h: dict) -> None:
-    (app_dir / "README.md").write_text(
-        readme_template.format(
-            title=h["title"],
-            description=h["description"],
-            author=h["author"],
-            email=h["email"],
-            app_name=h["app_name"],
-        ),
-        encoding="utf-8",
+    content = Template(readme_template).render(
+        title=h["title"],
+        description=h["description"],
+        author=h["author"],
+        email=h["email"],
+        app_name=h["app_name"],
     )
+    (app_dir / "README.md").write_text(content, encoding="utf-8")
 
 
 def _write_gitignore(app_dir: Path) -> None:
@@ -229,24 +230,21 @@ def _write_module_init(app_dir: Path, module: str, h: dict) -> None:
 
 
 def _write_hooks_py(app_dir: Path, module: str, h: dict) -> None:
-    (app_dir / module / "hooks.py").write_text(
-        hooks_template.format(title=h["title"]),
-        encoding="utf-8",
-    )
+    content = Template(hooks_template).render(title=h["title"])
+    (app_dir / module / "hooks.py").write_text(content, encoding="utf-8")
 
 
 def _write_tasks_py(app_dir: Path, module: str, h: dict) -> None:
-    (app_dir / module / "tasks.py").write_text(
-        tasks_template.format(title=h["title"]),
-        encoding="utf-8",
-    )
+    content = Template(tasks_template).render(title=h["title"])
+    (app_dir / module / "tasks.py").write_text(content, encoding="utf-8")
 
 
 def _write_routes_py(app_dir: Path, module: str, h: dict) -> None:
-    (app_dir / module / "routes.py").write_text(
-        routes_template.format(title=h["title"], app_name=h["app_name"]),
-        encoding="utf-8",
+    content = Template(routes_template).render(
+        title=h["title"],
+        app_name=h["app_name"],
     )
+    (app_dir / module / "routes.py").write_text(content, encoding="utf-8")
 
 
 def _write_doctypes_init(app_dir: Path, module: str) -> None:
@@ -323,25 +321,25 @@ def _build_tree(node, base: Path, current: Path) -> None:
 
 # ── Templates ─────────────────────────────────────────────────────────────────
 
-grunt_app_template = '''\
-"""{title}."""
+grunt_app_template = '''\\
+"""{{ title }}."""
 
-APP_NAME = "{app_name}"
-APP_TITLE = "{title}"
-APP_VERSION = "{version}"
-APP_DESCRIPTION = "{description}"
-APP_AUTHOR = "{author}"
-APP_EMAIL = "{email}"
-APP_ICON = "{icon}"
-APP_COLOR = "{color}"
-MODULES = ["{module}"]
+APP_NAME = "{{ app_name }}"
+APP_TITLE = "{{ title }}"
+APP_VERSION = "{{ version }}"
+APP_DESCRIPTION = "{{ description }}"
+APP_AUTHOR = "{{ author }}"
+APP_EMAIL = "{{ email }}"
+APP_ICON = "{{ icon }}"
+APP_COLOR = "{{ color }}"
+MODULES = ["{{ module }}"]
 DEPENDS_ON = []
 '''
 
-install_template = '''\
-"""Installation hook for {title}.
+install_template = '''\\
+"""Installation hook for {{ title }}.
 
-Called automatically after `grunt app install {app_name}`.
+Called automatically after `grunt app install {{ app_name }}`.
 Use this file for setup that fixtures cannot cover (e.g. role creation,
 initial settings, computed seed data).
 """
@@ -360,7 +358,7 @@ logger = structlog.get_logger()
 
 async def after_install(session: AsyncSession, site_name: str) -> None:
     """Run once when the app is first installed on a site."""
-    logger.info("{app_name}.install", site=site_name, status="ok")
+    logger.info("{{ app_name }}.install", site=site_name, status="ok")
     # TODO: add roles, settings, or other one-time setup here
 '''
 
@@ -401,8 +399,8 @@ from typing import Any
 #     # your logic here
 '''
 
-tasks_template = '''\
-"""Background tasks for {title}.
+tasks_template = '''\\
+"""Background tasks for {{ title }}.
 
 Tasks are discovered automatically from this file if the module
 is listed in MODULES and the app is installed.
@@ -431,10 +429,10 @@ from __future__ import annotations
 #     logger.info("example_task.start", doc_id=doc_id)
 '''
 
-routes_template = '''\
-"""Custom FastAPI routes for {title}.
+routes_template = '''\\
+"""Custom FastAPI routes for {{ title }}.
 
-This router is mounted automatically at /api/v1/x/{app_name}/ when
+This router is mounted automatically at /api/v1/x/{{ app_name }}/ when
 the module is registered. Use it for endpoints not covered by the
 generic /docs/* CRUD API.
 """
@@ -443,23 +441,23 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-router = APIRouter(prefix="/{app_name}", tags=["{title}"])
+router = APIRouter(prefix="/{{ app_name }}", tags=["{{ title }}"])
 
 
 # @router.get("/ping")
 # async def ping() -> dict:
-#     return {{"status": "ok", "app": "{app_name}"}}
+#     return {"status": "ok", "app": "{{ app_name }}"}
 '''
 
-readme_template = '''\
-# {title}
+readme_template = '''\\
+# {{ title }}
 
-{description}
+{{ description }}
 
 ## Встановлення
 
 ```bash
-grunt app install {app_name}
+grunt app install {{ app_name }}
 grunt serve --reload
 ```
 
@@ -467,7 +465,7 @@ grunt serve --reload
 
 ```bash
 # Додати DocType
-grunt doctype scaffold MyDocType --app {app_name}
+grunt doctype scaffold MyDocType --app {{ app_name }}
 
 # Переглянути встановлені DocTypes
 grunt doctype list
@@ -475,7 +473,7 @@ grunt doctype list
 
 ## Автор
 
-{author} <{email}>
+{{ author }} <{{ email }}>
 '''
 
 gitignore_template = '''\
