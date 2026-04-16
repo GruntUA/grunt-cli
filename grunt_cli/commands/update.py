@@ -66,6 +66,33 @@ def _git_pull(path: Path, label: str) -> bool:
     else:
         console.print(f"  [green]✓[/green] {label}: оновлено {old_hash} → {new_hash}")
 
+        # Відображення статистики змін
+        diff_result = subprocess.run(
+            ["git", "diff", "--stat", f"{old_hash}..{new_hash}"],
+            cwd=str(path),
+            capture_output=True,
+            text=True,
+        )
+        if diff_result.returncode == 0:
+            stats = diff_result.stdout.strip()
+            if stats:
+                import re  # noqa: PLC0415
+                for line in stats.splitlines():
+                    line = line.strip()
+                    if "changed" in line and ("insertion" in line or "deletion" in line):
+                        # Підсвічуємо підсумок: (+) зеленим, (-) червоним
+                        line = line.replace("(+)", "[green](+)[/green]")
+                        line = line.replace("(-)", "[red](-)[/red]")
+                        console.print(f"    [cyan]{line}[/cyan]")
+                    else:
+                        # Підсвічуємо гістограму: + зеленим, - червоним
+                        if "|" in line:
+                            path_part, stats_part = line.rsplit("|", 1)
+                            stats_part = re.sub(r"(\++)", r"[green]\1[/green]", stats_part)
+                            stats_part = re.sub(r"(-+)", r"[red]\1[/red]", stats_part)
+                            line = f"{path_part}|{stats_part}"
+                        console.print(f"    [dim]{line}[/dim]")
+
     return True
 
 
