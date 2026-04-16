@@ -509,4 +509,6 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+uv.lock
+package-lock.json
 '''
