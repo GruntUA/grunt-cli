@@ -1,0 +1,23 @@
+"""Installation hook for {{ title }}.
+
+Called automatically after `grunt app install {{ app_name }}`.
+Use this file for setup that fixtures cannot cover (e.g. role creation,
+initial settings, computed seed data).
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+import structlog
+
+logger = structlog.get_logger()
+
+
+async def after_install(session: AsyncSession, site_name: str) -> None:
+    """Run once when the app is first installed on a site."""
+    logger.info("{{ app_name }}.install", site=site_name, status="ok")
+    # TODO: add roles, settings, or other one-time setup here

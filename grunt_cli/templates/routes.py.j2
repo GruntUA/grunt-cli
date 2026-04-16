@@ -1,0 +1,17 @@
+"""Custom FastAPI routes for {{ title }}.
+
+This router is mounted automatically at /api/v1/x/{{ app_name }}/ when
+the module is registered. Use it for endpoints not covered by the
+generic /docs/* CRUD API.
+"""
+
+from __future__ import annotations
+
+from fastapi import APIRouter
+
+router = APIRouter(prefix="/{{ app_name }}", tags=["{{ title }}"])
+
+
+# @router.get("/ping")
+# async def ping() -> dict:
+#     return {"status": "ok", "app": "{{ app_name }}"}

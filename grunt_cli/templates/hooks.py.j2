@@ -1,0 +1,34 @@
+"""Event hooks for {{ title }}.
+
+Register handlers with @on("<event>").
+
+Supported events:
+  before_save     — before a document is saved (new or existing)
+  after_save      — after a document is saved
+  before_delete   — before a document is deleted
+  after_delete    — after a document is deleted
+  on_transition   — after a workflow state transition
+  on_submit       — after a document is submitted
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+# from grunt.core.hooks import on
+# import structlog
+#
+# logger = structlog.get_logger()
+#
+#
+# @on("before_save")
+# async def my_before_save_hook(
+#     doctype: str,
+#     doc: dict[str, Any],
+#     user: Any,
+#     session: Any,
+#     **kwargs: Any,
+# ) -> None:
+#     if doctype != "MyDocType":
+#         return
+#     # your logic here

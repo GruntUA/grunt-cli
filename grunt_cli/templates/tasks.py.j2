@@ -1,0 +1,27 @@
+"""Background tasks for {{ title }}.
+
+Tasks are discovered automatically from this file if the module
+is listed in MODULES and the app is installed.
+
+Usage:
+    from grunt.core.tasks.broker import retryable_task
+
+    @retryable_task()
+    async def my_task(param: str) -> None:
+        ...
+
+Dispatch from anywhere:
+    await my_task.kiq(param="value")
+"""
+
+from __future__ import annotations
+
+# from grunt.core.tasks.broker import retryable_task
+# import structlog
+#
+# logger = structlog.get_logger()
+#
+#
+# @retryable_task()
+# async def example_task(doc_id: str) -> None:
+#     logger.info("example_task.start", doc_id=doc_id)

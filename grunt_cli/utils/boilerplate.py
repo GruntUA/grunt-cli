@@ -13,12 +13,19 @@ import subprocess
 from pathlib import Path
 
 import click
-from jinja2 import Template
+from jinja2 import Environment, PackageLoader, select_autoescape
 from rich.console import Console
 from rich.panel import Panel
 from rich.tree import Tree
 
 console = Console()
+
+# ── Jinja Environment ─────────────────────────────────────────────────────────
+
+env = Environment(
+    loader=PackageLoader("grunt_cli", "templates"),
+    autoescape=select_autoescape(),
+)
 
 
 # ── Validation ───────────────────────────────────────────────────────────────
@@ -166,7 +173,7 @@ def _create_app_boilerplate(dest: Path, hooks: dict, no_git: bool = False) -> No
 
 
 def _write_grunt_app_py(app_dir: Path, module: str, h: dict) -> None:
-    content = Template(grunt_app_template).render(
+    content = env.get_template("grunt_app.py.j2").render(
         title=h["title"],
         app_name=h["app_name"],
         version=h["version"],
@@ -200,7 +207,7 @@ def _write_app_json(app_dir: Path, module: str, h: dict) -> None:
 
 
 def _write_install_py(app_dir: Path, h: dict) -> None:
-    content = Template(install_template).render(
+    content = env.get_template("install.py.j2").render(
         title=h["title"],
         app_name=h["app_name"],
     )
@@ -208,7 +215,7 @@ def _write_install_py(app_dir: Path, h: dict) -> None:
 
 
 def _write_readme(app_dir: Path, h: dict) -> None:
-    content = Template(readme_template).render(
+    content = env.get_template("README.md.j2").render(
         title=h["title"],
         description=h["description"],
         author=h["author"],
@@ -219,7 +226,8 @@ def _write_readme(app_dir: Path, h: dict) -> None:
 
 
 def _write_gitignore(app_dir: Path) -> None:
-    (app_dir / ".gitignore").write_text(gitignore_template, encoding="utf-8")
+    content = env.get_template("gitignore.j2").render()
+    (app_dir / ".gitignore").write_text(content, encoding="utf-8")
 
 
 def _write_module_init(app_dir: Path, module: str, h: dict) -> None:
@@ -230,17 +238,17 @@ def _write_module_init(app_dir: Path, module: str, h: dict) -> None:
 
 
 def _write_hooks_py(app_dir: Path, module: str, h: dict) -> None:
-    content = Template(hooks_template).render(title=h["title"])
+    content = env.get_template("hooks.py.j2").render(title=h["title"])
     (app_dir / module / "hooks.py").write_text(content, encoding="utf-8")
 
 
 def _write_tasks_py(app_dir: Path, module: str, h: dict) -> None:
-    content = Template(tasks_template).render(title=h["title"])
+    content = env.get_template("tasks.py.j2").render(title=h["title"])
     (app_dir / module / "tasks.py").write_text(content, encoding="utf-8")
 
 
 def _write_routes_py(app_dir: Path, module: str, h: dict) -> None:
-    content = Template(routes_template).render(
+    content = env.get_template("routes.py.j2").render(
         title=h["title"],
         app_name=h["app_name"],
     )
@@ -319,194 +327,4 @@ def _build_tree(node, base: Path, current: Path) -> None:
             node.add(f"[dim]{p.name}[/dim]")
 
 
-# ── Templates ─────────────────────────────────────────────────────────────────
-
-grunt_app_template = '''\\
-"""{{ title }}."""
-
-APP_NAME = "{{ app_name }}"
-APP_TITLE = "{{ title }}"
-APP_VERSION = "{{ version }}"
-APP_DESCRIPTION = "{{ description }}"
-APP_AUTHOR = "{{ author }}"
-APP_EMAIL = "{{ email }}"
-APP_ICON = "{{ icon }}"
-APP_COLOR = "{{ color }}"
-MODULES = ["{{ module }}"]
-DEPENDS_ON = []
-'''
-
-install_template = '''\\
-"""Installation hook for {{ title }}.
-
-Called automatically after `grunt app install {{ app_name }}`.
-Use this file for setup that fixtures cannot cover (e.g. role creation,
-initial settings, computed seed data).
-"""
-
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession
-
-import structlog
-
-logger = structlog.get_logger()
-
-
-async def after_install(session: AsyncSession, site_name: str) -> None:
-    """Run once when the app is first installed on a site."""
-    logger.info("{{ app_name }}.install", site=site_name, status="ok")
-    # TODO: add roles, settings, or other one-time setup here
-'''
-
-hooks_template = '''\
-"""Event hooks for {title}.
-
-Register handlers with @on("<event>").
-
-Supported events:
-  before_save     — before a document is saved (new or existing)
-  after_save      — after a document is saved
-  before_delete   — before a document is deleted
-  after_delete    — after a document is deleted
-  on_transition   — after a workflow state transition
-  on_submit       — after a document is submitted
-"""
-
-from __future__ import annotations
-
-from typing import Any
-
-# from grunt.core.hooks import on
-# import structlog
-#
-# logger = structlog.get_logger()
-#
-#
-# @on("before_save")
-# async def my_before_save_hook(
-#     doctype: str,
-#     doc: dict[str, Any],
-#     user: Any,
-#     session: Any,
-#     **kwargs: Any,
-# ) -> None:
-#     if doctype != "MyDocType":
-#         return
-#     # your logic here
-'''
-
-tasks_template = '''\\
-"""Background tasks for {{ title }}.
-
-Tasks are discovered automatically from this file if the module
-is listed in MODULES and the app is installed.
-
-Usage:
-    from grunt.core.tasks.broker import retryable_task
-
-    @retryable_task()
-    async def my_task(param: str) -> None:
-        ...
-
-Dispatch from anywhere:
-    await my_task.kiq(param="value")
-"""
-
-from __future__ import annotations
-
-# from grunt.core.tasks.broker import retryable_task
-# import structlog
-#
-# logger = structlog.get_logger()
-#
-#
-# @retryable_task()
-# async def example_task(doc_id: str) -> None:
-#     logger.info("example_task.start", doc_id=doc_id)
-'''
-
-routes_template = '''\\
-"""Custom FastAPI routes for {{ title }}.
-
-This router is mounted automatically at /api/v1/x/{{ app_name }}/ when
-the module is registered. Use it for endpoints not covered by the
-generic /docs/* CRUD API.
-"""
-
-from __future__ import annotations
-
-from fastapi import APIRouter
-
-router = APIRouter(prefix="/{{ app_name }}", tags=["{{ title }}"])
-
-
-# @router.get("/ping")
-# async def ping() -> dict:
-#     return {"status": "ok", "app": "{{ app_name }}"}
-'''
-
-readme_template = '''\\
-# {{ title }}
-
-{{ description }}
-
-## Встановлення
-
-```bash
-grunt app install {{ app_name }}
-grunt serve --reload
-```
-
-## Розробка
-
-```bash
-# Додати DocType
-grunt doctype scaffold MyDocType --app {{ app_name }}
-
-# Переглянути встановлені DocTypes
-grunt doctype list
-```
-
-## Автор
-
-{{ author }} <{{ email }}>
-'''
-
-gitignore_template = '''\
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-.Python
-*.egg-info/
-dist/
-build/
-.eggs/
-.venv/
-venv/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Grunt
-*.db
-*.db-shm
-*.db-wal
-.env
-.env.*
-!.env.example
-uv.lock
-package-lock.json
-'''
+# (Templates moved to grunt_cli/templates/)
