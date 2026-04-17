@@ -42,16 +42,23 @@ def _git_pull(path: Path, label: str) -> bool:
     console.print(f"  [dim]Оновлюю {label} ({branch})...[/dim]")
 
     result = subprocess.run(
-        ["git", "pull", "--rebase"],
+        ["git", "pull", "--rebase", "--autostash"],
         cwd=str(path),
         capture_output=True,
         text=True,
     )
 
     if result.returncode != 0:
-        console.print(f"  [red]✗[/red] {label}: помилка git pull")
-        if result.stderr.strip():
-            console.print(f"    [dim]{result.stderr.strip()}[/dim]")
+        stderr = result.stderr.strip()
+        if "could not read Username" in stderr or "Authentication failed" in stderr:
+            console.print(f"  [yellow]⚠[/yellow]  {label}: немає доступу до GitHub")
+            console.print("    [dim]Налаштуйте SSH-ключ або git credentials:[/dim]")
+            console.print("    [dim]  ssh-keygen -t ed25519 && ssh-add ~/.ssh/id_ed25519[/dim]")
+            console.print("    [dim]  git remote set-url origin git@github.com:ORG/REPO.git[/dim]")
+        else:
+            console.print(f"  [red]✗[/red] {label}: помилка git pull")
+            if stderr:
+                console.print(f"    [dim]{stderr}[/dim]")
         return False
 
     new_hash = subprocess.run(
