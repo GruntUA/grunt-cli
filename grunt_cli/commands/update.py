@@ -118,6 +118,95 @@ def _install_deps(path: Path, label: str) -> None:
             run_mise(path, "deps")
 
 
+def _update_python_packages() -> None:
+    """Оновити Python пакети (uv sync --upgrade або pip)."""
+    import shutil  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+    import os  # noqa: PLC0415
+    
+    # Перевіряємо наявність uv
+    uv_bin = find_uv()
+    if uv_bin:
+        console.print("  [dim]Оновлюю Python пакети (uv sync --upgrade)...[/dim]")
+        env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
+        result = subprocess.run([uv_bin, "sync", "--upgrade"], check=False, env=env)
+        if result.returncode != 0:
+            console.print("  [yellow]⚠[/yellow]  uv sync --upgrade завершився з помилкою")
+        else:
+            console.print("  [green]✓[/green] Python пакети оновлені")
+        return
+    
+    # Fallback на pip
+    pip_bin = shutil.which("pip") or shutil.which("pip3")
+    if pip_bin:
+        console.print("  [dim]uv не знайдено, оновлюю через pip...[/dim]")
+        result = subprocess.run(
+            [pip_bin, "install", "--upgrade", "pip"],
+            check=False
+        )
+        if result.returncode != 0:
+            console.print("  [yellow]⚠[/yellow]  pip update завершився з помилкою")
+        else:
+            console.print("  [green]✓[/green] Python пакети оновлені")
+    else:
+        console.print("  [yellow]⚠[/yellow]  Ні uv, ні pip не знайдено")
+
+
+def _run_npm_install(app_dir: Path) -> None:
+    """Встановити npm пакети."""
+    import shutil  # noqa: PLC0415
+    
+    mise = shutil.which("mise")
+    if mise:
+        npm_run = [mise, "exec", "--", "npm"]
+    else:
+        npm = shutil.which("npm")
+        if not npm:
+            console.print("  [yellow]⚠[/yellow]  npm не знайдено")
+            return
+        npm_run = [npm]
+    
+    console.print(f"  [dim]Встановлюю npm пакети ({app_dir.name})...[/dim]")
+    result = subprocess.run([*npm_run, "install"], cwd=str(app_dir), check=False)
+    
+    if result.returncode != 0:
+        # Retry after cleaning node_modules
+        nm = app_dir / "node_modules"
+        if nm.exists():
+            console.print("  [dim]Очищення node_modules, повторна спроба...[/dim]")
+            import shutil as _shutil  # noqa: PLC0415
+            _shutil.rmtree(nm)
+            result = subprocess.run([*npm_run, "install"], cwd=str(app_dir), check=False)
+    
+    if result.returncode == 0:
+        subprocess.run([*npm_run, "audit", "fix"], cwd=str(app_dir), check=False)
+        console.print("  [green]✓[/green] npm пакети встановлені")
+    else:
+        console.print("  [yellow]⚠[/yellow]  npm install завершився з помилкою")
+
+
+def _run_migrations(site: str | None) -> None:
+    """Запустити міграції БД."""
+    site_dir = get_site_dir()
+    if site_dir is None:
+        console.print("  [yellow]⚠[/yellow]  grunt.site не знайдено")
+        return
+    
+    console.print(f"  [dim]Запускаю міграції БД{f' для {site}' if site else ''}...[/dim]")
+    
+    # Визначаємо директорію для міграцій
+    backend_dir = site_dir / "apps" / "grunt" / "backend"
+    if not backend_dir.exists():
+        console.print(f"  [yellow]⚠[/yellow]  Grunt backend не знайдено: {backend_dir}")
+        return
+    
+    # Запускаємо міграції через mise
+    if run_mise(site_dir, "db:migrate"):
+        console.print("  [green]✓[/green] Міграції завершені")
+    else:
+        console.print("  [yellow]⚠[/yellow]  Міграції завершилися з помилкою")
+
+
 def _find_bench_dir() -> Path | None:
     """Шукає кореневу директорію bench-проєкту."""
     return get_bench_dir()
@@ -168,21 +257,36 @@ def _get_cli_dir() -> Path | None:
               help="Оновити тільки фреймворк")
 @click.option("--apps", "update_apps", is_flag=True, default=False,
               help="Оновити тільки додатки")
+@click.option("--skip-packages", is_flag=True, default=False,
+              help="Не оновлювати Python пакети")
+@click.option("--skip-npm", is_flag=True, default=False,
+              help="Не встановлювати npm пакети")
+@click.option("--skip-migrate", is_flag=True, default=False,
+              help="Не запускати міграції БД")
 @click.option("--no-deps", is_flag=True, default=False,
               help="Не встановлювати залежності після оновлення")
-def update(update_cli: bool, update_framework: bool, update_apps: bool, no_deps: bool) -> None:
-    """Оновити CLI, фреймворк та додатки через git.
+@click.option("--site", default=None, help="Назва сайту (для migrate)")
+def update(update_cli: bool, update_framework: bool, update_apps: bool, 
+           skip_packages: bool, skip_npm: bool, skip_migrate: bool, 
+           no_deps: bool, site: str | None) -> None:
+    """Оновити CLI, фреймворк, додатки, пакети та схему БД.
 
     \b
-    Без прапорців оновлює все: CLI, фреймворк і додатки.
+    Послідовність:
+      1. git pull --rebase для CLI, фреймворку та додатків
+      2. uv sync --upgrade (Python пакети)
+      3. npm install
+      4. grunt migrate (міграція БД)
+
+    \b
+    Без прапорців оновлює все.
     З прапорцями — тільки вказані компоненти.
 
     \b
     Приклади:
       grunt update                  оновити все
-      grunt update --cli            тільки CLI
-      grunt update --framework      тільки фреймворк Grunt
-      grunt update --apps           тільки додатки
+      grunt update --apps           тільки додатки + пакети + міграції
+      grunt update --skip-migrate   без міграцій БД
       grunt update --no-deps        без перевстановлення залежностей
     """
     # Якщо жоден прапорець не вказано — оновлюємо все
@@ -242,6 +346,40 @@ def update(update_cli: bool, update_framework: bool, update_apps: bool, no_deps:
                     if not no_deps:
                         _install_deps(app_dir, app_dir.name)
                     updated_something = True
+        console.print()
+
+    # ── 4. Python пакети ────────────────────────────────────────────
+    if not skip_packages:
+        console.print("[bold cyan]Python пакети[/bold cyan]")
+        _update_python_packages()
+        updated_something = True
+        console.print()
+    else:
+        console.print("[dim]Python пакети пропущено (--skip-packages)[/dim]")
+        console.print()
+
+    # ── 5. npm пакети ──────────────────────────────────────────────
+    if not skip_npm:
+        console.print("[bold cyan]npm пакети[/bold cyan]")
+        apps_dir = _find_apps_dir()
+        if apps_dir and (apps_dir / "grunt").exists():
+            _run_npm_install(apps_dir / "grunt")
+            updated_something = True
+        else:
+            console.print("  [dim]Grunt app директорія не знайдена[/dim]")
+        console.print()
+    else:
+        console.print("[dim]npm пакети пропущено (--skip-npm)[/dim]")
+        console.print()
+
+    # ── 6. Міграція БД ──────────────────────────────────────────────
+    if not skip_migrate:
+        console.print("[bold cyan]Міграція БД[/bold cyan]")
+        _run_migrations(site)
+        updated_something = True
+        console.print()
+    else:
+        console.print("[dim]Міграція БД пропущена (--skip-migrate)[/dim]")
         console.print()
 
     # ── Фінал ───────────────────────────────────────────────────────
