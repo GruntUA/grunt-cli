@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import re
 import secrets
+import subprocess
 from pathlib import Path
 
 import click
-import httpx
 
 from grunt_cli.helpers import (
     GRUNT_REPO_URL,
@@ -78,6 +78,37 @@ def _init_bench(name: str, repo: str, branch: str) -> None:
 # grunt init (без аргументу) — ініціалізація поточного сайту
 # ---------------------------------------------------------------------------
 
+def _create_user_direct(grunt_dir: Path, site_dir: Path, email: str, password: str, full_name: str) -> None:
+    """Створює користувача напрямо в БД через backend grunt CLI (без запущеного сервера)."""
+    import os  # noqa: PLC0415
+
+    venv_grunt = grunt_dir / ".venv" / "bin" / "grunt"
+    if not venv_grunt.exists():
+        console.print("[red]✗[/red] Backend CLI не знайдено. Запусти [cyan]mise run deps[/cyan]")
+        return
+
+    env_path = site_dir / ".env"
+    result = subprocess.run(
+        [str(venv_grunt), "users", "create",
+         "--email", email, "--password", password, "--full-name", full_name],
+        cwd=str(grunt_dir),
+        env={**os.environ, "DOTENV_PATH": str(env_path)},
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        console.print(f"[green]✓[/green] Адміністратор {email} створений")
+    else:
+        output = (result.stdout + result.stderr).strip()
+        if "вже існує" in output or "already exists" in output:
+            console.print(f"[yellow]~[/yellow] Користувач {email} вже існує")
+        else:
+            console.print(f"[red]✗[/red] Помилка створення користувача:")
+            if output:
+                console.print(f"[dim]{output}[/dim]")
+            console.print(f"   Запусти вручну: [cyan]grunt users create[/cyan]")
+
+
 def _init_site() -> None:
     bench_dir = get_bench_dir()
 
@@ -125,29 +156,13 @@ def _init_site() -> None:
             console.print("[red]✗[/red] Ініціалізація сайту не завершилась")
             raise SystemExit(1)
 
-    # 3. Адміністратор
+    # 3. Адміністратор — створюємо напряму в БД через backend CLI
     console.print()
     if click.confirm("Створити адміністратора?", default=True):
-        email = click.prompt("  Email", default="admin@grunt.local")
+        email = click.prompt("  Email", default="admin@example.com")
         password = click.prompt("  Пароль", hide_input=True, confirmation_prompt=True)
         full_name = click.prompt("  Повне ім'я", default="Адміністратор")
-
-        try:
-            resp = httpx.post(
-                "http://localhost:8000/api/v1/auth/register",
-                json={"email": email, "password": password, "full_name": full_name},
-                timeout=5.0,
-            )
-            if resp.status_code in (200, 201):
-                console.print(f"[green]✓[/green] Адміністратор {email} створений")
-            elif resp.status_code == 409:
-                console.print(f"[yellow]~[/yellow] Користувач {email} вже існує")
-            else:
-                console.print(f"[red]✗[/red] Помилка: {resp.text}")
-        except Exception:  # noqa: BLE001
-            console.print("[yellow]⚠[/yellow]  Сервер недоступний.")
-            console.print("   Спочатку запусти [cyan]grunt serve[/cyan], потім зареєструй адміна:")
-            console.print("   [dim]POST http://localhost:8000/api/v1/auth/register[/dim]")
+        _create_user_direct(grunt_dir, site_dir, email, password, full_name)
 
     # 4. Фінал
     console.print()

@@ -2,11 +2,34 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+
 import click
 import httpx
 from rich.table import Table
 
-from grunt_cli.helpers import DEFAULT_API, auth_headers, console
+from grunt_cli.helpers import DEFAULT_API, auth_headers, console, get_bench_dir
+
+
+def _get_venv_grunt() -> str | None:
+    """Повертає шлях до backend grunt CLI у .venv, або None якщо не знайдено."""
+    bench_dir = get_bench_dir()
+    if bench_dir is None:
+        return None
+    venv_grunt = bench_dir / "apps" / "grunt" / ".venv" / "bin" / "grunt"
+    return str(venv_grunt) if venv_grunt.exists() else None
+
+
+def _get_dotenv_path() -> str | None:
+    """Повертає шлях до .env активного сайту, або None."""
+    from grunt_cli.helpers import get_current_site  # noqa: PLC0415
+    site_dir = get_current_site()
+    if site_dir is None:
+        return None
+    env_file = site_dir / ".env"
+    return str(env_file) if env_file.exists() else None
+
 
 
 @click.group()
@@ -51,13 +74,39 @@ def users_list(api: str) -> None:
 
 
 @users.command("create")
+@click.option("--email", prompt="Email")
+@click.option("--password", prompt="Пароль", hide_input=True, confirmation_prompt=True)
+@click.option("--full-name", prompt="Повне ім'я")
 @click.option("--api", default=DEFAULT_API, show_default=True)
-def users_create(api: str) -> None:
-    """Створити нового користувача."""
-    email = click.prompt("Email")
-    password = click.prompt("Пароль", hide_input=True, confirmation_prompt=True)
-    full_name = click.prompt("Повне ім'я")
+def users_create(email: str, password: str, full_name: str, api: str) -> None:
+    """Створити нового користувача (напряму в БД або через API якщо сервер запущений)."""
 
+    # Спробуємо напряму через backend CLI (не потребує запущеного сервера)
+    venv_grunt = _get_venv_grunt()
+    dotenv = _get_dotenv_path()
+    if venv_grunt:
+        env = {**os.environ}
+        if dotenv:
+            env["DOTENV_PATH"] = dotenv
+        grunt_dir = str(get_bench_dir() / "apps" / "grunt")  # type: ignore[operator]
+        result = subprocess.run(
+            [venv_grunt, "users", "create",
+             "--email", email, "--password", password, "--full-name", full_name],
+            cwd=grunt_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        output = (result.stdout + result.stderr).strip()
+        if result.returncode == 0:
+            console.print(f"[green]✓[/green] Створено: {email} ({full_name})")
+        elif "вже існує" in output or "already exists" in output:
+            console.print(f"[yellow]~[/yellow] Користувач {email} вже існує")
+        else:
+            console.print(f"[red]✗[/red] Помилка: {output}")
+        return
+
+    # Fallback: через HTTP API (якщо сервер запущений)
     try:
         resp = httpx.post(
             f"{api}/api/v1/auth/register",
@@ -73,7 +122,8 @@ def users_create(api: str) -> None:
         else:
             console.print(f"[red]✗[/red] Помилка: {resp.text}")
     except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout):
-        console.print(f"[red]✗[/red] Сервер {api} недоступний.")
+        console.print(f"[red]✗[/red] Backend CLI не знайдено і сервер {api} недоступний.")
+        console.print("   Запусти [cyan]grunt serve[/cyan] та спробуй знову.")
 
 
 @users.command("set-password")
