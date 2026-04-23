@@ -116,11 +116,14 @@ def _init_site() -> None:
     backend_dir = grunt_dir / "backend"
     if backend_dir.exists():
         console.print("[dim]Налаштування середовища та бази даних...[/dim]")
-        run_mise(
+        ok = run_mise(
             grunt_dir,
             "setup",
             env={"DOTENV_PATH": str(site_dir / ".env")}
         )
+        if not ok:
+            console.print("[red]✗[/red] Ініціалізація сайту не завершилась")
+            raise SystemExit(1)
 
     # 3. Адміністратор
     console.print()
