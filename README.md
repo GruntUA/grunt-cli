@@ -22,7 +22,7 @@ curl https://mise.jdx.dev/install.sh | sh
 ### 2. Managed Dependencies
 
 Mise will automatically install and manage:
-- **Python 3.12**
+- **Python 3.14**
 - **Node.js**
 - **uv**
 
@@ -273,6 +273,6 @@ When working outside a project directory, downloaded apps are cached in `~/.grun
 
 ## Requirements
 
-- Python 3.12+
+- Python 3.14+
 - Git
 - Node.js + npm (for frontend development)

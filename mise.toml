@@ -1,6 +1,6 @@
 [tools]
-python = "3.12"
-node = "20"
+python = "3.14"
+node = "24"
 uv = "latest"
 
 [tasks.install]
