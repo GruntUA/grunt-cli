@@ -10,11 +10,37 @@ NC='\033[0m'
 info() { printf "${CYAN}▸${NC} %s\n" "$*"; }
 ok()   { printf "${GREEN}✔${NC} %s\n" "$*"; }
 
+if [ -r /etc/os-release ]; then
+    . /etc/os-release
+else
+    echo "Cannot detect OS: /etc/os-release is missing" >&2
+    exit 1
+fi
+
+if ! command -v apt-get &>/dev/null; then
+    echo "This bootstrap currently supports Debian/Ubuntu (apt-get required)." >&2
+    exit 1
+fi
+
+if [ "${ID:-}" != "debian" ] && [ "${ID:-}" != "ubuntu" ] && [[ "${ID_LIKE:-}" != *debian* ]]; then
+    echo "Unsupported distro: ${ID:-unknown}. Use Debian/Ubuntu or a Debian-based distro." >&2
+    exit 1
+fi
+
+if command -v sudo &>/dev/null; then
+    SUDO="sudo"
+elif [ "$(id -u)" -eq 0 ]; then
+    SUDO=""
+else
+    echo "sudo is required for package installation when not running as root." >&2
+    exit 1
+fi
+
 info "Оновлення списку пакетів..."
-sudo apt update -y -q
+DEBIAN_FRONTEND=noninteractive ${SUDO} apt-get update -y -q
 
 info "Встановлення системних залежностей (curl, git, gnupg)..."
-sudo apt install -y -q curl git gnupg
+DEBIAN_FRONTEND=noninteractive ${SUDO} apt-get install -y -q curl git gnupg
 
 if ! command -v mise &>/dev/null; then
     info "Встановлення mise..."
