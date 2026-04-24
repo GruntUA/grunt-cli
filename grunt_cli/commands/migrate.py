@@ -85,8 +85,12 @@ import structlog
 
 structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING))
 
+from sqlalchemy import or_
+
 from grunt.core.db.base import Base
+from grunt.core.metadata.compiler import compile_doctype_to_table
 from grunt.core.site.manager import current_site, site_manager
+from grunt.core.metadata.registry import doctype_registry
 from grunt.core.startup import load_core_doctypes, seed_app_workspaces, sync_all_doctypes
 
 TARGET_SITE = {site_name!r}
@@ -111,9 +115,37 @@ async def _sync() -> None:
                 await seed_app_workspaces(session, site)
                 # Ensure physical tables match the refreshed metadata.
                 await sync_all_doctypes(session, eng)
+
+                # Backfill required fields with defaults for legacy rows created
+                # before fields became required (prevents 422 on first save).
+                backfilled = 0
+                for dt in await doctype_registry.list_all():
+                    if dt.is_virtual:
+                        continue
+
+                    table = compile_doctype_to_table(dt)
+                    for field in dt.fields:
+                        if not getattr(field, "required", False):
+                            continue
+
+                        default = getattr(field, "default", None)
+                        if default in (None, ""):
+                            continue
+
+                        col = table.c.get(field.fieldname)
+                        if col is None:
+                            continue
+
+                        result = await session.execute(
+                            table.update()
+                            .where(or_(col.is_(None), col == ""))
+                            .values({{field.fieldname: default}})
+                        )
+                        backfilled += int(getattr(result, "rowcount", 0) or 0)
+
                 await session.commit()
 
-            print(f"✓ {{site}}")
+            print(f"✓ {{site}} (backfilled={{backfilled}})")
         except Exception as exc:  # noqa: BLE001
             print(f"✗ {{site}}: {{exc}}")
             failures.append(site)
