@@ -75,35 +75,57 @@ def migrate(site_name: str | None) -> None:
     # ── 1. Sync DocType metadata ──────────────────────────────────────
     console.print("[bold cyan][1/2] Синхронізація DocType метаданих[/bold cyan]")
 
-    sync_script = (
-        "import asyncio, logging; logging.disable(logging.CRITICAL)\n"
-        "import structlog; structlog.configure("
-        "wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING))\n"
-        "from grunt.core.site.manager import current_site, site_manager\n"
-        "from grunt.core.db.base import Base\n"
-        "from grunt.core.metadata.registry import doctype_registry\n"
-        "from grunt.core.startup import ("
-        "load_core_doctypes, seed_app_workspaces, sync_all_doctypes)\n"
-        "async def _sync():\n"
-        "    for site in site_manager.get_sites():\n"
-        "        token = current_site.set(site)\n"
-        "        try:\n"
-        "            eng = site_manager.get_engine(site)\n"
-        "            maker = site_manager.get_session_maker(site)\n"
-        "            async with eng.begin() as conn:\n"
-        "                await conn.run_sync(Base.metadata.create_all)\n"
-        "            async with maker() as session:\n"
-        "                await load_core_doctypes(session, eng)\n"
-        "                await sync_all_doctypes(session, eng)\n"
-        "                await seed_app_workspaces(session, site)\n"
-        "                await session.commit()\n"
-        "            print(f'  ✓ {site}')\n"
-        "        except Exception as e:\n"
-        "            print(f'  ✗ {site}: {e}')\n"
-        "        finally:\n"
-        "            current_site.reset(token)\n"
-        "asyncio.run(_sync())\n"
-    )
+    sync_script = f"""
+import asyncio
+import logging
+
+logging.disable(logging.CRITICAL)
+
+import structlog
+
+structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING))
+
+from grunt.core.db.base import Base
+from grunt.core.site.manager import current_site, site_manager
+from grunt.core.startup import load_core_doctypes, seed_app_workspaces, sync_all_doctypes
+
+TARGET_SITE = {site_name!r}
+
+
+async def _sync() -> None:
+    sites = [TARGET_SITE] if TARGET_SITE else site_manager.get_sites()
+    failures: list[str] = []
+
+    for site in sites:
+        token = current_site.set(site)
+        try:
+            eng = site_manager.get_engine(site)
+            maker = site_manager.get_session_maker(site)
+            async with eng.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+
+            async with maker() as session:
+                # Persist latest bundled core metadata into DB before app sync.
+                await load_core_doctypes(session, sync_db=True)
+                # Import/update app DocTypes from JSON files into grunt_meta_doctype.
+                await seed_app_workspaces(session, site)
+                # Ensure physical tables match the refreshed metadata.
+                await sync_all_doctypes(session, eng)
+                await session.commit()
+
+            print(f"✓ {{site}}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"✗ {{site}}: {{exc}}")
+            failures.append(site)
+        finally:
+            current_site.reset(token)
+
+    if failures:
+        raise SystemExit(1)
+
+
+asyncio.run(_sync())
+"""
 
     result = subprocess.run(
         [venv_python, "-c", sync_script],
