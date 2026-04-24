@@ -131,6 +131,10 @@ def app_install(name: str, site: str | None) -> None:
     # Знаходимо Python у venv bench
     python_exe = str(bench / ".venv" / "bin" / "python")
     if not Path(python_exe).exists():
+        # Fallback 1: .venv у самому додатку grunt (framework)
+        python_exe = str(apps_dir / "grunt" / ".venv" / "bin" / "python")
+    
+    if not Path(python_exe).exists():
         python_exe = sys.executable
 
     # Знаходимо site dir для cwd
