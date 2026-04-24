@@ -12,6 +12,7 @@ from grunt_cli.helpers import (
     find_uv,
     get_bench_dir,
     get_site_dir,
+    get_current_site,
     run_mise,
 )
 
@@ -129,7 +130,11 @@ def _update_python_packages() -> None:
     if uv_bin:
         console.print("  [dim]Оновлюю Python пакети (uv sync --upgrade)...[/dim]")
         env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
-        result = subprocess.run([uv_bin, "sync", "--upgrade"], check=False, env=env)
+        app_dir = _find_apps_dir()
+        cwd_dir = str(app_dir / "grunt") if app_dir else None
+        if cwd_dir:
+            env["PWD"] = cwd_dir
+        result = subprocess.run([uv_bin, "sync", "--upgrade"], cwd=cwd_dir, check=False, env=env)
         if result.returncode != 0:
             console.print("  [yellow]⚠[/yellow]  uv sync --upgrade завершився з помилкою")
         else:
@@ -187,7 +192,7 @@ def _run_npm_install(app_dir: Path) -> None:
 
 def _run_migrations(site: str | None) -> None:
     """Запустити міграції БД."""
-    site_dir = get_site_dir()
+    site_dir = get_current_site()
     if site_dir is None:
         console.print("  [yellow]⚠[/yellow]  grunt.site не знайдено")
         return
@@ -195,13 +200,20 @@ def _run_migrations(site: str | None) -> None:
     console.print(f"  [dim]Запускаю міграції БД{f' для {site}' if site else ''}...[/dim]")
     
     # Визначаємо директорію для міграцій
-    backend_dir = site_dir / "apps" / "grunt" / "backend"
+    from grunt_cli.helpers import get_apps_dir  # noqa: PLC0415
+    try:
+        apps_dir = get_apps_dir()
+    except SystemExit:
+        console.print("  [yellow]⚠[/yellow]  Grunt backend не знайдено (bench не визначено)")
+        return
+    
+    backend_dir = apps_dir / "grunt" / "backend"
     if not backend_dir.exists():
         console.print(f"  [yellow]⚠[/yellow]  Grunt backend не знайдено: {backend_dir}")
         return
     
     # Запускаємо міграції через mise
-    if run_mise(site_dir, "db:migrate"):
+    if run_mise(apps_dir / "grunt", "db:migrate", env={"SITE_NAME": site or site_dir.name}):
         console.print("  [green]✓[/green] Міграції завершені")
     else:
         console.print("  [yellow]⚠[/yellow]  Міграції завершилися з помилкою")
