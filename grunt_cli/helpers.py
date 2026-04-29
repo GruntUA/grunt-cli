@@ -186,6 +186,7 @@ def run_mise_popen(cwd: Path, *args: str, env: dict[str, str] | None = None, con
     if config_file:
         final_env["MISE_CONFIG_FILE"] = str(config_file)
 
+    kwargs.setdefault("start_new_session", True)
     return subprocess.Popen(cmd, cwd=str(cwd), env=final_env, **kwargs)
 
 

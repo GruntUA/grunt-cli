@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import time
+from os import killpg, getpgid
 from pathlib import Path
 
 import click
@@ -105,7 +106,18 @@ def _serve_bench(
     def shutdown(sig=None, frame=None):
         console.print("\n[dim]Зупиняю сервери...[/dim]")
         for p in procs:
-            p.terminate()
+            try:
+                killpg(getpgid(p.pid), signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                p.terminate()
+        for p in procs:
+            try:
+                p.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                try:
+                    killpg(getpgid(p.pid), signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    p.kill()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, shutdown)
