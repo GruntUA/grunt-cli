@@ -201,4 +201,38 @@ asyncio.run(_sync())
         sys.exit(result.returncode)
 
     console.print("[green]✓[/green] Alembic міграції застосовано\n")
+
+    # ── 3. Signal running server to reload metadata cache ─────────────
+    # SiteContextMiddleware checks for this file on the next request
+    # and calls doctype_registry.clear_cache() automatically.
+    bench_dir = get_bench_dir()
+    if bench_dir is not None:
+        sites_dir = bench_dir / "sites"
+    else:
+        sites_dir = framework_dir.parent / "sites"
+
+    if site_name:
+        _signal_sites = [site_name]
+    else:
+        _signal_sites = [
+            d.name
+            for d in sites_dir.iterdir()
+            if d.is_dir() and not d.name.startswith(".") and (d / "grunt.site").exists()
+        ] if sites_dir.exists() else []
+
+    _signaled: list[str] = []
+    for _s in _signal_sites:
+        _reload_file = sites_dir / _s / ".reload_meta"
+        try:
+            _reload_file.touch()
+            _signaled.append(_s)
+        except Exception:
+            pass
+
+    if _signaled:
+        console.print(
+            f"[dim]🔄 Сервер отримає сигнал оновлення кешу при наступному запиті "
+            f"({', '.join(_signaled)})[/dim]"
+        )
+
     console.print("[bold green]✅ Міграція завершена[/bold green]")
