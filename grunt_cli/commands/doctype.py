@@ -4,14 +4,25 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import click
 import httpx
 from rich import box
 from rich.table import Table
 
-from grunt_cli.helpers import DEFAULT_API, auth_headers, console
+from grunt_cli.helpers import (
+    DEFAULT_API,
+    auth_headers,
+    console,
+    get_bench_dir,
+    get_current_site,
+    get_site_dir,
+    get_token,
+)
 
 
 @click.group()
@@ -626,6 +637,107 @@ def doctype_import(file: str, update: bool, api: str) -> None:
 @click.option("--api", default=DEFAULT_API, show_default=True)
 def doctype_sync(name: str, api: str) -> None:
     """Синхронізує DocType зі схемою БД."""
+
+    def _local_sync() -> int:
+        bench_dir = get_bench_dir()
+        if bench_dir:
+            site_dir = get_current_site()
+            backend_dir = bench_dir / "apps" / "grunt" / "backend"
+            venv_candidates = [
+                bench_dir / ".venv",
+                bench_dir / "apps" / "grunt" / ".venv",
+            ]
+            run_cwd = bench_dir
+        else:
+            site_dir = get_site_dir()
+            backend_dir = Path.cwd() / "apps" / "grunt" / "backend"
+            venv_candidates = [
+                Path.cwd() / ".venv",
+                Path.cwd() / "apps" / "grunt" / ".venv",
+            ]
+            run_cwd = Path.cwd()
+
+        if not site_dir:
+            console.print("[red]✗[/red] Сайт не знайдено")
+            return 1
+
+        python_bin = next(
+            (cand / "bin" / "python" for cand in venv_candidates if (cand / "bin" / "python").exists()),
+            None,
+        )
+        venv_dir = python_bin.parent.parent if python_bin else None
+
+        if not python_bin or not python_bin.exists() or not venv_dir:
+            checked = ", ".join(str(p) for p in venv_candidates)
+            console.print(f"[red]✗[/red] Python venv не знайдено. Перевірено: {checked}")
+            return 1
+
+        script = f"""
+import asyncio
+from grunt.core.metadata.compiler import get_table_name, sync_table
+from grunt.core.metadata.registry import doctype_registry
+from grunt.core.site.manager import current_site, site_manager
+from grunt.core.startup import load_core_doctypes
+
+TARGET_NAME = {name!r}
+
+async def main():
+    sites = site_manager.get_sites()
+    target = sites[0] if sites else None
+    if not target:
+        print("ERROR: no sites found")
+        raise SystemExit(1)
+
+    token = current_site.set(target)
+    try:
+        eng = site_manager.get_engine(target)
+        maker = site_manager.get_session_maker(target)
+        async with maker() as session:
+            await doctype_registry.load_all(session)
+            await load_core_doctypes(session, eng)
+            dt = await doctype_registry.get(TARGET_NAME)
+            await sync_table(dt, eng, session=session)
+            await session.commit()
+            print(get_table_name(dt.module, dt.name))
+    finally:
+        current_site.reset(token)
+
+asyncio.run(main())
+"""
+
+        env = {
+            **os.environ,
+            "DOTENV_PATH": str(site_dir / ".env"),
+            "PYTHONPATH": str(backend_dir),
+            "VIRTUAL_ENV": str(venv_dir),
+            "PATH": str(venv_dir / "bin") + os.pathsep + os.environ.get("PATH", ""),
+        }
+
+        result = subprocess.run(
+            [str(python_bin), "-c", script],
+            capture_output=True,
+            text=True,
+            cwd=str(run_cwd),
+            env=env,
+        )
+
+        if result.returncode != 0:
+            if result.stderr.strip():
+                console.print(f"[red]✗[/red] {result.stderr.strip()}")
+            else:
+                console.print("[red]✗[/red] Локальна синхронізація не вдалася")
+            return result.returncode
+
+        table_name = (result.stdout or "").strip().splitlines()
+        synced = table_name[-1] if table_name else name
+        console.print(f"[green]✓[/green] Синхронізовано локально: {synced}")
+        return 0
+
+    token = get_token()
+    if not token:
+        console.print("[dim]Токен не знайдено, запускаю локальну синхронізацію без авторизації...[/dim]")
+        raise SystemExit(_local_sync())
+
     try:
         resp = httpx.post(
             f"{api}/api/v1/meta/doctypes/{name}/sync",
@@ -635,12 +747,15 @@ def doctype_sync(name: str, api: str) -> None:
         if resp.status_code == 404:
             console.print(f"[red]✗[/red] DocType '{name}' не знайдено")
             return
+        if resp.status_code in (401, 403):
+            console.print("[yellow]![/yellow] Немає доступу через API, запускаю локальну синхронізацію...")
+            raise SystemExit(_local_sync())
         resp.raise_for_status()
         body = resp.json()
         result = body.get("data", body)
     except httpx.ConnectError:
-        console.print("[red]✗[/red] Сервер недоступний. Запусти [cyan]grunt serve[/cyan]")
-        return
+        console.print("[yellow]![/yellow] Сервер недоступний, запускаю локальну синхронізацію...")
+        raise SystemExit(_local_sync())
 
     console.print(f"[green]✓[/green] Синхронізовано: {result.get('table_name', name)}")
     added = result.get("columns_added") or []
