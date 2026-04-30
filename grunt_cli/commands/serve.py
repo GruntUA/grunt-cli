@@ -130,10 +130,26 @@ def _serve_bench(
         _kill_port(5173)
 
     if not frontend_only and backend_dir.exists():
+        if not no_reload:
+            reload_dirs = [str(backend_dir)]
+            # Also watch all installed app packages (e.g. hrm/hrm, cms/cms, …)
+            apps_dir = bench_dir / "apps"
+            if apps_dir.is_dir():
+                for app_dir in sorted(apps_dir.iterdir()):
+                    if app_dir.name == "grunt" or not app_dir.is_dir():
+                        continue
+                    # Convention: package dir has same name as the app folder
+                    pkg_dir = app_dir / app_dir.name
+                    if pkg_dir.is_dir():
+                        reload_dirs.append(str(pkg_dir))
+            reload_flag = "--reload " + " ".join(f"--reload-dir {d}" for d in reload_dirs)
+        else:
+            reload_flag = ""
+
         backend_env.update({
             "HOST": host,
             "PORT": str(port),
-            "RELOAD": "--reload --reload-dir " + str(backend_dir) if not no_reload else ""
+            "RELOAD": reload_flag,
         })
         
         console.print(f"[green]▶[/green] Backend:  http://{host}:{port}  [dim](bench, {len(sites)} сайтів)[/dim]")
