@@ -189,6 +189,46 @@ class TestDb:
             assert "-2" in cmd
 
 
+# ── grunt migrate ───────────────────────────────────────────────
+
+
+class TestMigrate:
+    @patch("grunt_cli.commands.migrate.subprocess.run")
+    def test_migrate_without_site_runs_all_bench_sites(self, mock_run, runner, tmp_path, monkeypatch):
+        bench = tmp_path / "bench"
+        app_dir = bench / "apps" / "grunt"
+        backend_dir = app_dir / "backend"
+        backend_dir.mkdir(parents=True)
+        (backend_dir / "alembic.ini").write_text("[alembic]\n")
+
+        site_a = bench / "sites" / "a.local"
+        site_b = bench / "sites" / "b.local"
+        site_a.mkdir(parents=True)
+        site_b.mkdir(parents=True)
+        (site_a / "grunt.site").write_text("{}")
+        (site_b / "grunt.site").write_text("{}")
+        (site_a / ".env").write_text("DEBUG=true\n")
+        (site_b / ".env").write_text("DEBUG=true\n")
+
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="✓ a.local\n✓ b.local\n", stderr=""),
+            MagicMock(returncode=0),
+        ]
+
+        monkeypatch.chdir(bench)
+        result = runner.invoke(cli, ["migrate"])
+
+        assert result.exit_code == 0
+        assert "Сайти: всі (2)" in result.output
+
+        sync_cmd = mock_run.call_args_list[0][0][0]
+        assert sync_cmd[1] == "-c"
+        assert "TARGET_SITE = None" in sync_cmd[2]
+
+        assert (site_a / ".reload_meta").exists()
+        assert (site_b / ".reload_meta").exists()
+
+
 # ── grunt auth ──────────────────────────────────────────────────
 
 

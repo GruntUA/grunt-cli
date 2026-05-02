@@ -12,6 +12,22 @@ import click
 from grunt_cli.helpers import console, get_bench_dir, get_current_site, get_site_dir
 
 
+def _bench_sites(bench_dir: Path) -> list[Path]:
+    """Повертає всі валідні сайти bench (тільки директорії з grunt.site)."""
+    sites_dir = bench_dir / "sites"
+    if not sites_dir.exists():
+        return []
+
+    return sorted(
+        [
+            site
+            for site in sites_dir.iterdir()
+            if site.is_dir() and not site.name.startswith(".") and (site / "grunt.site").exists()
+        ],
+        key=lambda p: p.name,
+    )
+
+
 def _resolve_context(site_name: str | None) -> tuple[Path, Path, dict]:
     """Повертає (framework_dir, site_dir, env)."""
     bench_dir = get_bench_dir()
@@ -23,11 +39,15 @@ def _resolve_context(site_name: str | None) -> tuple[Path, Path, dict]:
                 console.print(f"[red]✗[/red] Сайт '{site_name}' не знайдено")
                 raise SystemExit(1)
         else:
+            # Без --site мігруємо всі сайти. Для env беремо активний сайт,
+            # а якщо його немає — перший валідний сайт у bench.
             site_dir = get_current_site()
+            if site_dir is None or site_dir.parent != (bench_dir / "sites"):
+                all_sites = _bench_sites(bench_dir)
+                site_dir = all_sites[0] if all_sites else None
             if site_dir is None:
                 console.print(
-                    "[red]✗[/red] Немає активного сайту. "
-                    "Вкажи [cyan]--site <name>[/cyan] або запусти [cyan]grunt use <site>[/cyan]"
+                    "[red]✗[/red] Не знайдено жодного сайту у bench (sites/*/grunt.site)"
                 )
                 raise SystemExit(1)
         framework_dir = bench_dir / "apps" / "grunt"
@@ -52,7 +72,7 @@ def _resolve_context(site_name: str | None) -> tuple[Path, Path, dict]:
 
 
 @click.command("migrate")
-@click.option("--site", "site_name", default=None, help="Цільовий сайт")
+@click.option("--site", "site_name", default=None, help="Цільовий сайт (без параметра: всі сайти)")
 def migrate(site_name: str | None) -> None:
     """Синхронізувати схему БД та метадані DocType з JSON-файлів.
 
@@ -70,7 +90,13 @@ def migrate(site_name: str | None) -> None:
     if not Path(venv_python).exists():
         venv_python = sys.executable
 
-    console.print(f"[dim]Сайт: {site_dir.name}[/dim]\n")
+    if site_name:
+        console.print(f"[dim]Сайт: {site_dir.name}[/dim]\n")
+    elif get_bench_dir() is not None:
+        sites_count = len(_bench_sites(get_bench_dir()))
+        console.print(f"[dim]Сайти: всі ({sites_count})[/dim]\n")
+    else:
+        console.print(f"[dim]Сайт: {site_dir.name}[/dim]\n")
 
     # ── 1. Sync DocType metadata ──────────────────────────────────────
     console.print("[bold cyan][1/2] Синхронізація DocType метаданих[/bold cyan]")
