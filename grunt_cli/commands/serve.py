@@ -64,7 +64,6 @@ def _serve_bench(
 ) -> None:
     """Запуск серверів у bench-режимі (мультисайтовість)."""
     grunt_dir = bench_dir / "apps" / "grunt"
-    backend_dir = grunt_dir / "backend"
     venv_dir = bench_dir / ".venv"
 
     if not grunt_dir.exists():
@@ -79,7 +78,7 @@ def _serve_bench(
     python_exe = str(venv_dir / "bin" / "python") if (venv_dir / "bin" / "python").exists() else sys.executable
 
     # Визначаємо активний сайт для env
-    backend_env = {**os.environ, "PYTHONPATH": str(backend_dir)}
+    backend_env = {**os.environ, "PYTHONPATH": str(grunt_dir)}
     active_site_dir = None
     if sites:
         # Перевіряємо, чи cwd знаходиться в одному з сайтів
@@ -129,9 +128,9 @@ def _serve_bench(
     if not backend_only:
         _kill_port(5173)
 
-    if not frontend_only and backend_dir.exists():
+    if not frontend_only:
         if not no_reload:
-            reload_dirs = [str(backend_dir)]
+            reload_dirs = [str(grunt_dir / "grunt")]
             # Also watch all installed app packages (e.g. hrm/hrm, cms/cms, …)
             apps_dir = bench_dir / "apps"
             if apps_dir.is_dir():
