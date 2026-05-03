@@ -113,11 +113,11 @@ structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.
 
 from sqlalchemy import or_
 
-from grunt.core.db.base import Base
-from grunt.core.metadata.compiler import compile_doctype_to_table
-from grunt.core.site.manager import current_site, site_manager
-from grunt.core.metadata.registry import doctype_registry
-from grunt.core.startup import load_core_doctypes, seed_app_workspaces, sync_all_doctypes
+from grunt.db.base import Base
+from grunt.metadata.compiler import compile_doctype_to_table
+from grunt.site.manager import current_site, site_manager
+from grunt.metadata.registry import doctype_registry
+from grunt.startup import load_core_doctypes, seed_app_workspaces, sync_all_doctypes
 
 TARGET_SITE = {site_name!r}
 
@@ -209,12 +209,18 @@ asyncio.run(_sync())
     # ── 2. Alembic migrations ─────────────────────────────────────────
     console.print("[bold cyan][2/2] Alembic міграції[/bold cyan]")
 
-    backend_dir = framework_dir / "backend"
-    alembic_ini = backend_dir / "alembic.ini"
+    alembic_ini = framework_dir / "alembic.ini"
+    if not alembic_ini.exists():
+        # Backward compatibility for older layouts with backend/alembic.ini.
+        alembic_ini = framework_dir / "backend" / "alembic.ini"
     alembic_bin = str(framework_dir / ".venv" / "bin" / "alembic")
     if not Path(alembic_bin).exists():
         import shutil  # noqa: PLC0415
         alembic_bin = shutil.which("alembic") or "alembic"
+
+    if not alembic_ini.exists():
+        console.print("[red]✗[/red] Не знайдено alembic.ini у framework директорії")
+        sys.exit(1)
 
     result = subprocess.run(
         [alembic_bin, "-c", str(alembic_ini), "upgrade", "head"],
