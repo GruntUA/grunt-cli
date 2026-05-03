@@ -7,7 +7,6 @@ import secrets
 from pathlib import Path
 
 import click
-import httpx
 
 from grunt_cli.helpers import (
     GRUNT_REPO_URL,
@@ -149,93 +148,22 @@ def master(repo: str, branch: str) -> None:
         password = click.prompt("  Пароль", hide_input=True, confirmation_prompt=True)
         full_name = click.prompt("  Повне ім'я", default="Адміністратор")
 
-        # Для реєстрації потрібен працюючий сервер — запускаємо тимчасово
-        import os
-        import subprocess  # noqa: E401
-        import sys
-        import time
-
-        venv_dir = project_dir / ".venv"
-        venv_bin = venv_dir / "bin"
-        python_exe = str(venv_bin / "python") if (venv_bin / "python").exists() else sys.executable
-        backend_cmd = [
-            python_exe, "-m", "uvicorn", "grunt.main:app",
-            "--host", "127.0.0.1", "--port", str(port),
-        ]
-        env = {
-            **os.environ,
-            "PYTHONPATH": str(backend_dir),
-            "VIRTUAL_ENV": str(venv_dir),
-            "PATH": str(venv_bin) + os.pathsep + os.environ.get("PATH", ""),
-        }
-
-        console.print("[dim]Запускаю сервер для реєстрації...[/dim]")
-        server_proc = subprocess.Popen(
-            backend_cmd, cwd=str(grunt_dir), env=env,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        # Створюємо адміна напряму через backend CLI (без сервера)
+        from grunt_cli.helpers import venv_delegate  # noqa: PLC0415
+        rc = venv_delegate(
+            "users", "create",
+            "--email", email,
+            "--password", password,
+            "--full-name", full_name,
+            site=site_name,
         )
-
-        # Чекаємо поки сервер запуститься
-        api_base = f"http://127.0.0.1:{port}"
-        site_headers = {"Host": site_name}
-        ready = False
-        for _ in range(30):
-            time.sleep(0.5)
-            try:
-                httpx.get(f"{api_base}/docs", headers=site_headers, timeout=1.0)
-                ready = True
-                break
-            except Exception:  # noqa: BLE001
-                continue
-
-        if ready:
-            registered = False
-            while not registered:
-                try:
-                    resp = httpx.post(
-                        f"{api_base}/api/v1/auth/register",
-                        headers=site_headers,
-                        json={"email": email, "password": password, "full_name": full_name},
-                        timeout=5.0,
-                    )
-                    if resp.status_code in (200, 201):
-                        console.print(f"[green]✓[/green] Адміністратор {email} створений")
-                        data = resp.json()
-                        token = data.get("access_token") or data.get("token")
-                        if token:
-                            save_token(token)
-                            console.print("[green]✓[/green] Токен збережено")
-                        registered = True
-                    elif resp.status_code == 409:
-                        console.print(f"[yellow]~[/yellow] Користувач {email} вже існує")
-                        registered = True
-                    elif resp.status_code == 422:
-                        # Помилка валідації — показуємо причину і пропонуємо ввести інші дані
-                        detail = resp.json().get("detail", [])
-                        for err in detail:
-                            msg = err.get("msg", "")
-                            loc = err.get("loc", [])
-                            field = loc[-1] if loc else "?"
-                            console.print(f"[red]✗[/red] {field}: {msg}")
-                        if not click.confirm("  Спробувати з іншими даними?", default=True):
-                            registered = True
-                        else:
-                            email = click.prompt("  Email", default=email)
-                            password = click.prompt("  Пароль", hide_input=True, confirmation_prompt=True)
-                            full_name = click.prompt("  Повне ім'я", default=full_name)
-                    else:
-                        console.print(f"[red]✗[/red] Помилка: {resp.text}")
-                        registered = True
-                except Exception as exc:  # noqa: BLE001
-                    console.print(f"[yellow]⚠[/yellow]  Не вдалося створити адміна: {exc}")
-                    registered = True
+        if rc == 0:
+            console.print(f"[green]✓[/green] Адміністратор {email} створений")
+        elif rc != -1:
+            console.print(f"[yellow]⚠[/yellow] Не вдалося створити адміна автоматично.")
+            console.print("Після запуску: [cyan]grunt users create[/cyan]")
         else:
-            console.print("[yellow]⚠[/yellow]  Сервер не відповів за 15 секунд")
-            console.print("   Після запуску зареєструй адміна вручну:")
-            console.print(f"   [dim]POST {api_base}/api/v1/auth/register[/dim]")
-
-        server_proc.terminate()
-        server_proc.wait(timeout=5)
+            console.print("[yellow]⚠[/yellow] Backend CLI не знайдено. Після запуску: [cyan]grunt users create[/cyan]")
 
     # ── 12. Фінал ─────────────────────────────────────────────────────
     console.print()

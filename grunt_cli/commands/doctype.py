@@ -2,26 +2,22 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 from pathlib import Path
 import subprocess
-import sys
 
 import click
-import httpx
 from rich import box
 from rich.table import Table
 
 from grunt_cli.helpers import (
-    DEFAULT_API,
-    auth_headers,
     console,
+    find_doctype_json,
     get_bench_dir,
     get_current_site,
-    get_site_dir,
-    get_token,
+    run_venv_script,
+    venv_delegate,
 )
 
 
@@ -32,69 +28,27 @@ def doctype() -> None:
 
 @doctype.command("list")
 @click.option("--module", "-m", default=None, help="Фільтр по модулю")
-@click.option("--api", default=DEFAULT_API, show_default=True)
-def doctype_list(module: str | None, api: str) -> None:
+@click.option("--site", default=None, help="Назва сайту")
+def doctype_list(module: str | None, site: str | None) -> None:
     """Виводить список усіх DocTypes."""
-    try:
-        params = {"module": module} if module else {}
-        resp = httpx.get(
-            f"{api}/api/v1/meta/doctypes",
-            headers=auth_headers(),
-            params=params,
-            timeout=5.0,
-        )
-        resp.raise_for_status()
-        doctypes = resp.json()["data"]
-    except httpx.ConnectError:
-        console.print(f"[red]✗[/red] Не можу підключитись до {api}. Запусти [cyan]grunt serve[/cyan]")
-        return
-
-    if not doctypes:
-        console.print("[dim]DocTypes не знайдено[/dim]")
-        return
-
-    table = Table(box=box.ROUNDED, show_header=True, header_style="bold")
-    table.add_column("Назва", style="cyan")
-    table.add_column("Label")
-    table.add_column("Модуль", style="dim")
-    table.add_column("Полів", justify="right")
-    table.add_column("Child", justify="center")
-
-    for dt in doctypes:
-        table.add_row(
-            dt["name"],
-            dt["label"],
-            dt["module"],
-            str(len(dt.get("fields", []))),
-            "✓" if dt.get("is_child") else "",
-        )
-
-    console.print(table)
-    console.print(f"[dim]Всього: {len(doctypes)}[/dim]")
+    extra = ["--module", module] if module else []
+    rc = venv_delegate("doctype", "list", *extra, site=site)
+    if rc == -1:
+        console.print("[red]✗[/red] Backend CLI не знайдено. Запустіть у папці проекту.")
+    raise SystemExit(0 if rc in (0, -1) else rc)
 
 
 @doctype.command("show")
 @click.argument("name")
-@click.option("--api", default=DEFAULT_API, show_default=True)
-def doctype_show(name: str, api: str) -> None:
-    """Показує деталі DocType включно з полями."""
-    try:
-        resp = httpx.get(
-            f"{api}/api/v1/meta/doctypes/{name}",
-            headers=auth_headers(),
-            timeout=5.0,
-        )
-        if resp.status_code == 404:
-            console.print(f"[red]✗[/red] DocType '{name}' не знайдено")
-            return
-        resp.raise_for_status()
-        dt = resp.json()["data"]
-    except httpx.ConnectError:
-        console.print("[red]✗[/red] Сервер недоступний")
-        return
+def doctype_show(name: str) -> None:
+    """Показує деталі DocType включно з полями (читає з диску)."""
+    dt = find_doctype_json(name)
+    if dt is None:
+        console.print(f"[red]✗[/red] DocType '{name}' не знайдено")
+        raise SystemExit(1)
 
-    console.print(f"\n[bold]{dt['name']}[/bold]  [dim]{dt['label']}[/dim]")
-    console.print(f"Модуль: [cyan]{dt['module']}[/cyan]\n")
+    console.print(f"\n[bold]{dt['name']}[/bold]  [dim]{dt.get('label', '')}[/dim]")
+    console.print(f"Модуль: [cyan]{dt.get('module', '')}[/cyan]\n")
 
     table = Table(box=box.SIMPLE, show_header=True)
     table.add_column("fieldname", style="cyan")
@@ -109,7 +63,7 @@ def doctype_show(name: str, api: str) -> None:
             continue
         table.add_row(
             f["fieldname"],
-            f["label"],
+            f.get("label", ""),
             f["fieldtype"],
             "✓" if f.get("required") else "",
             "✓" if f.get("in_list_view") else "",
@@ -121,28 +75,17 @@ def doctype_show(name: str, api: str) -> None:
 @doctype.command("test-gen")
 @click.argument("name")
 @click.option("--output", "-o", default=None, help="Вихідний файл (за замовчуванням: stdout)")
-@click.option("--api", default=DEFAULT_API, show_default=True)
-def doctype_test_gen(name: str, output: str | None, api: str) -> None:
-    """Генерує pytest тести для DocType на основі його метаданих.
+def doctype_test_gen(name: str, output: str | None) -> None:
+    """Генерує pytest тести для DocType на основі його метаданих (читає з диску).
 
     \b
     Приклади:
       grunt doctype test-gen Invoice
       grunt doctype test-gen Invoice -o tests/test_invoice.py
     """
-    try:
-        resp = httpx.get(
-            f"{api}/api/v1/meta/doctypes/{name}",
-            headers=auth_headers(),
-            timeout=5.0,
-        )
-        if resp.status_code == 404:
-            console.print(f"[red]✗[/red] DocType '{name}' не знайдено")
-            raise SystemExit(1)
-        resp.raise_for_status()
-        dt = resp.json()["data"]
-    except httpx.ConnectError:
-        console.print("[red]✗[/red] Сервер недоступний. Запусти [cyan]grunt serve[/cyan]")
+    dt = find_doctype_json(name)
+    if dt is None:
+        console.print(f"[red]✗[/red] DocType '{name}' не знайдено")
         raise SystemExit(1)
 
     content = _generate_tests(dt)
@@ -475,88 +418,47 @@ class Test{name}Auth:
 @doctype.command("export")
 @click.argument("name")
 @click.option("-o", "--output", default=None, help="Вихідний файл (за замовчуванням: <name>.json)")
-@click.option("--include-children", is_flag=True, help="Включити залежні Child DocTypes")
-@click.option("--api", default=DEFAULT_API, show_default=True)
-def doctype_export(name: str, output: str | None, include_children: bool, api: str) -> None:
-    """Експортувати метадані DocType у JSON для версіонування та обміну.
+def doctype_export(name: str, output: str | None) -> None:
+    """Експортувати метадані DocType у JSON (читає з диску, сервер не потрібен).
 
     \b
     Приклади:
       grunt doctype export Invoice
       grunt doctype export Invoice -o Invoice_backup.json
-      grunt doctype export Invoice --include-children
     """
-    try:
-        resp = httpx.get(
-            f"{api}/api/v1/meta/doctypes/{name}",
-            headers=auth_headers(),
-            timeout=5.0,
-        )
-        if resp.status_code == 404:
-            console.print(f"[red]✗[/red] DocType '{name}' не знайдено")
-            raise SystemExit(1)
-        resp.raise_for_status()
-        dt = resp.json()["data"]
-    except httpx.ConnectError:
-        console.print("[red]✗[/red] Сервер недоступний. Запусти [cyan]grunt serve[/cyan]")
+    dt = find_doctype_json(name)
+    if dt is None:
+        console.print(f"[red]✗[/red] DocType '{name}' не знайдено")
         raise SystemExit(1)
-
-    export_data = {"doctype": dt}
-
-    # Include child doctypes if requested
-    if include_children:
-        child_doctypes = []
-        for field in dt.get("fields", []):
-            if field.get("fieldtype") == "Table":
-                child_name = field.get("options")
-                if child_name:
-                    try:
-                        child_resp = httpx.get(
-                            f"{api}/api/v1/meta/doctypes/{child_name}",
-                            headers=auth_headers(),
-                            timeout=5.0,
-                        )
-                        if child_resp.status_code == 200:
-                            child_doctypes.append(child_resp.json()["data"])
-                    except httpx.ConnectError:
-                        pass
-        if child_doctypes:
-            export_data["children"] = child_doctypes
 
     output_file = output or f"{name}.json"
     from pathlib import Path  # noqa: PLC0415
-    Path(output_file).write_text(json.dumps(export_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    Path(output_file).write_text(json.dumps({"doctype": dt}, ensure_ascii=False, indent=2), encoding="utf-8")
 
     console.print(f"[green]✓[/green] Експортовано DocType [cyan]{name}[/cyan]")
     console.print(f"  Файл: [dim]{output_file}[/dim]")
-    if include_children and export_data.get("children"):
-        console.print(f"  Включено {len(export_data['children'])} child DocTypes")
     console.print(f"  Імпорт: [dim]grunt doctype import {output_file}[/dim]")
 
 
 @doctype.command("import")
 @click.argument("file", type=click.Path(exists=True))
-@click.option("--update", is_flag=True, help="Оновити якщо уже існує (без флага - помилка при дублюванні)")
-@click.option("--api", default=DEFAULT_API, show_default=True)
-def doctype_import(file: str, update: bool, api: str) -> None:
-    """Імпортувати метадані DocType з JSON файлу.
+@click.option("--update", is_flag=True, help="Оновити якщо вже існує")
+@click.option("--site", default=None, help="Назва сайту")
+def doctype_import(file: str, update: bool, site: str | None) -> None:
+    """Імпортувати метадані DocType з JSON файлу напрямо в БД.
 
     \b
     Приклади:
       grunt doctype import Invoice.json
       grunt doctype import Invoice.json --update
     """
-    from pathlib import Path  # noqa: PLC0415
-
     try:
         data = json.loads(Path(file).read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         console.print(f"[red]✗[/red] Помилка JSON: {e}")
         raise SystemExit(1)
 
-    doctypes_to_import = []
-
-    # Extract main doctype
+    doctypes_to_import: list[dict] = []
     if "doctype" in data:
         doctypes_to_import.append(data["doctype"])
     elif isinstance(data, dict) and "name" in data:
@@ -564,205 +466,66 @@ def doctype_import(file: str, update: bool, api: str) -> None:
     else:
         console.print("[red]✗[/red] Файл повинен мати ключ 'doctype' або 'name'")
         raise SystemExit(1)
-
-    # Extract child doctypes if present
     if "children" in data:
         doctypes_to_import.extend(data["children"])
 
-    imported = 0
-    errors = 0
+    update_flag = "True" if update else "False"
+    dt_json = json.dumps(doctypes_to_import, ensure_ascii=False)
 
-    for dt in doctypes_to_import:
-        dt_name = dt.get("name")
-        is_child = dt.get("is_child", False)
+    script = f"""
+import asyncio, json
+from grunt.metadata.doctype import DocType
+from grunt.metadata.registry import doctype_registry
+from grunt.cli.utils import _site_session
+import os
 
-        try:
-            # Check if exists
-            check = httpx.get(
-                f"{api}/api/v1/meta/doctypes/{dt_name}",
-                headers=auth_headers(),
-                timeout=5.0,
-            )
+site = os.environ.get('GRUNT_SITE')
+doctypes_to_import = json.loads({dt_json!r})
+update = {update_flag}
+imported = 0
+errors = 0
 
-            if check.status_code == 200 and not update:
-                console.print(f"  [yellow]![/yellow] {dt_name}: уже існує (використай --update для зміни)")
+async def _run():
+    global imported, errors
+    async with _site_session(site) as (session, eng):
+        for dt_data in doctypes_to_import:
+            dt_name = dt_data.get('name', '?')
+            try:
+                existing = await doctype_registry.get(dt_name)
+                if existing and not update:
+                    print(f'  ! {{dt_name}}: вже існує (використай --update)')
+                    errors += 1
+                    continue
+                dt = DocType.model_validate(dt_data)
+                await doctype_registry.update(dt, session, eng)
+                await session.commit()
+                action = 'оновлено' if existing else 'створено'
+                print(f'  ✓ {{dt_name}}: {{action}}')
+                imported += 1
+            except Exception as e:
+                print(f'  ✗ {{dt_name}}: {{e}}')
                 errors += 1
-                continue
 
-            if check.status_code == 200 and update:
-                # Update
-                resp = httpx.put(
-                    f"{api}/api/v1/meta/doctypes/{dt_name}",
-                    headers=auth_headers(),
-                    json=dt,
-                    timeout=10.0,
-                )
-                if resp.status_code == 200:
-                    imported += 1
-                    marker = " (дочірній)" if is_child else ""
-                    console.print(f"  [cyan]~[/cyan] {dt_name}{marker}: оновлено")
-                else:
-                    errors += 1
-                    console.print(f"  [red]✗[/red] {dt_name}: {resp.status_code} {resp.text[:80]}")
-            else:
-                # Create
-                resp = httpx.post(
-                    f"{api}/api/v1/meta/doctypes",
-                    headers=auth_headers(),
-                    json=dt,
-                    timeout=10.0,
-                )
-                if resp.status_code in (200, 201):
-                    imported += 1
-                    marker = " (дочірній)" if is_child else ""
-                    console.print(f"  [green]✓[/green] {dt_name}{marker}: створено")
-                else:
-                    errors += 1
-                    console.print(f"  [red]✗[/red] {dt_name}: {resp.status_code} {resp.text[:80]}")
-
-        except httpx.ConnectError:
-            console.print("[red]✗[/red] Сервер недоступний. Запусти [cyan]grunt serve[/cyan]")
-            raise SystemExit(1)
-        except Exception as e:
-            errors += 1
-            console.print(f"  [red]✗[/red] {dt_name}: {e}")
-
-    console.print(f"\n[green]✓[/green] Імпортовано: {imported} успішно, {errors} помилок")
-    if errors > 0 and not update:
-        console.print("  💡 Використай [cyan]--update[/cyan] для оновлення існуючих")
+asyncio.run(_run())
+print(f'\nІмпортовано: {{imported}} успішно, {{errors}} помилок')
+"""
+    rc = run_venv_script(script, site=site)
+    if rc == -1:
+        console.print("[red]✗[/red] Backend venv не знайдено. Запустіть у папці проекту.")
+    raise SystemExit(0 if rc in (0, -1) else rc)
 
 
 @doctype.command("sync")
 @click.argument("name")
-@click.option("--api", default=DEFAULT_API, show_default=True)
-def doctype_sync(name: str, api: str) -> None:
+@click.option("--site", default=None, help="Назва сайту")
+@click.option("--force", is_flag=True, help="Перечитати метадані з JSON-файлу на диску")
+def doctype_sync(name: str, site: str | None, force: bool) -> None:
     """Синхронізує DocType зі схемою БД."""
-
-    def _local_sync() -> int:
-        bench_dir = get_bench_dir()
-        if bench_dir:
-            site_dir = get_current_site()
-            backend_dir = bench_dir / "apps" / "grunt" / "backend"
-            venv_candidates = [
-                bench_dir / ".venv",
-                bench_dir / "apps" / "grunt" / ".venv",
-            ]
-            run_cwd = bench_dir
-        else:
-            site_dir = get_site_dir()
-            backend_dir = Path.cwd() / "apps" / "grunt" / "backend"
-            venv_candidates = [
-                Path.cwd() / ".venv",
-                Path.cwd() / "apps" / "grunt" / ".venv",
-            ]
-            run_cwd = Path.cwd()
-
-        if not site_dir:
-            console.print("[red]✗[/red] Сайт не знайдено")
-            return 1
-
-        python_bin = next(
-            (cand / "bin" / "python" for cand in venv_candidates if (cand / "bin" / "python").exists()),
-            None,
-        )
-        venv_dir = python_bin.parent.parent if python_bin else None
-
-        if not python_bin or not python_bin.exists() or not venv_dir:
-            checked = ", ".join(str(p) for p in venv_candidates)
-            console.print(f"[red]✗[/red] Python venv не знайдено. Перевірено: {checked}")
-            return 1
-
-        script = f"""
-import asyncio
-from grunt.core.metadata.compiler import get_table_name, sync_table
-from grunt.core.metadata.registry import doctype_registry
-from grunt.core.site.manager import current_site, site_manager
-from grunt.core.startup import load_core_doctypes
-
-TARGET_NAME = {name!r}
-
-async def main():
-    sites = site_manager.get_sites()
-    target = sites[0] if sites else None
-    if not target:
-        print("ERROR: no sites found")
-        raise SystemExit(1)
-
-    token = current_site.set(target)
-    try:
-        eng = site_manager.get_engine(target)
-        maker = site_manager.get_session_maker(target)
-        async with maker() as session:
-            await doctype_registry.load_all(session)
-            await load_core_doctypes(session, eng)
-            dt = await doctype_registry.get(TARGET_NAME)
-            await sync_table(dt, eng, session=session)
-            await session.commit()
-            print(get_table_name(dt.module, dt.name))
-    finally:
-        current_site.reset(token)
-
-asyncio.run(main())
-"""
-
-        env = {
-            **os.environ,
-            "DOTENV_PATH": str(site_dir / ".env"),
-            "PYTHONPATH": str(backend_dir),
-            "VIRTUAL_ENV": str(venv_dir),
-            "PATH": str(venv_dir / "bin") + os.pathsep + os.environ.get("PATH", ""),
-        }
-
-        result = subprocess.run(
-            [str(python_bin), "-c", script],
-            capture_output=True,
-            text=True,
-            cwd=str(run_cwd),
-            env=env,
-        )
-
-        if result.returncode != 0:
-            if result.stderr.strip():
-                console.print(f"[red]✗[/red] {result.stderr.strip()}")
-            else:
-                console.print("[red]✗[/red] Локальна синхронізація не вдалася")
-            return result.returncode
-
-        table_name = (result.stdout or "").strip().splitlines()
-        synced = table_name[-1] if table_name else name
-        console.print(f"[green]✓[/green] Синхронізовано локально: {synced}")
-        return 0
-
-    token = get_token()
-    if not token:
-        console.print("[dim]Токен не знайдено, запускаю локальну синхронізацію без авторизації...[/dim]")
-        raise SystemExit(_local_sync())
-
-    try:
-        resp = httpx.post(
-            f"{api}/api/v1/meta/doctypes/{name}/sync",
-            headers=auth_headers(),
-            timeout=10.0,
-        )
-        if resp.status_code == 404:
-            console.print(f"[red]✗[/red] DocType '{name}' не знайдено")
-            return
-        if resp.status_code in (401, 403):
-            console.print("[yellow]![/yellow] Немає доступу через API, запускаю локальну синхронізацію...")
-            raise SystemExit(_local_sync())
-        resp.raise_for_status()
-        body = resp.json()
-        result = body.get("data", body)
-    except httpx.ConnectError:
-        console.print("[yellow]![/yellow] Сервер недоступний, запускаю локальну синхронізацію...")
-        raise SystemExit(_local_sync())
-
-    console.print(f"[green]✓[/green] Синхронізовано: {result.get('table_name', name)}")
-    added = result.get("columns_added") or []
-    if added:
-        console.print(f"  Додано колонки: {', '.join(added)}")
-    else:
-        console.print("  [dim]Змін у схемі не було[/dim]")
+    extra = ["--force"] if force else []
+    rc = venv_delegate("doctype", "sync", name, *extra, site=site)
+    if rc == -1:
+        console.print("[red]✗[/red] Backend CLI не знайдено. Запустіть у папці проекту.")
+    raise SystemExit(0 if rc in (0, -1) else rc)
 
 
 @doctype.command("apply")

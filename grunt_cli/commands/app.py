@@ -7,17 +7,15 @@ import subprocess
 from pathlib import Path
 
 import click
-import httpx
 from rich import box
 from rich.table import Table
 
 from grunt_cli.helpers import (
-    DEFAULT_API,
-    auth_headers,
     console,
     get_apps_dir,
-    get_site_dir,
-    resolve_site_api,
+    get_bench_dir,
+    get_current_site,
+    venv_delegate,
 )
 
 
@@ -214,93 +212,49 @@ def app_uninstall(name: str, site: str | None, yes: bool) -> None:
         console.print(f"  [dim]Файли додатку залишено у apps/{name}/[/dim]")
         return
 
-    # Fallback: видалення через API
-    if site is not None:
-        base_api = resolve_site_api(site)
-    else:
-        base_api = DEFAULT_API
-
-    if not yes:
-        click.confirm(f"Видалити додаток '{name}' з {base_api}?", abort=True)
-
-    try:
-        resp = httpx.delete(
-            f"{base_api}/api/v1/apps/{name}",
-            headers=auth_headers(),
-            timeout=10.0,
-        )
-        if resp.status_code == 404:
-            console.print(f"[yellow]![/yellow] Додаток '{name}' не знайдено")
-            return
-        resp.raise_for_status()
-    except httpx.ConnectError:
-        console.print(f"[red]✗[/red] Не можу підключитись до {base_api}")
-        raise SystemExit(1)
-
-    console.print(f"[green]✓[/green] Додаток [bold]{name}[/bold] видалено з {base_api}")
+    # Fallback: no local site found — cannot uninstall without site info
+    console.print("[red]✗[/red] Сайт не знайдено. Вкажи [cyan]--site <name>[/cyan] або запустіть у папці проекту.")
+    raise SystemExit(1)
 
 
 @app.command("list")
-@click.option("--api", default=DEFAULT_API, show_default=True)
-def app_list(api: str) -> None:
+@click.option("--site", default=None, help="Назва сайту")
+def app_list(site: str | None) -> None:
     """Показати список встановлених додатків."""
-    try:
-        resp = httpx.get(
-            f"{api}/api/v1/apps/",
-            headers=auth_headers(),
-            timeout=5.0,
-        )
-        resp.raise_for_status()
-        apps = resp.json().get("data", [])
-    except httpx.ConnectError:
-        console.print(f"[red]✗[/red] Не можу підключитись до {api}")
-        raise SystemExit(1)
-
-    if not apps:
-        console.print("[dim]Додатків не встановлено[/dim]")
-        return
-
-    table = Table(box=box.ROUNDED, show_header=True, header_style="bold")
-    table.add_column("Назва", style="cyan")
-    table.add_column("Заголовок")
-    table.add_column("Версія", style="dim")
-    table.add_column("Встановлено", style="dim")
-
-    for a in apps:
-        table.add_row(
-            a["name"],
-            a["title"],
-            a["version"],
-            (a.get("installed_at") or "")[:10],
-        )
-
-    console.print(table)
+    rc = venv_delegate("app", "list", site=site)
+    if rc == -1:
+        console.print("[red]✗[/red] Backend CLI не знайдено. Запустіть у папці проекту.")
+    raise SystemExit(0 if rc in (0, -1) else rc)
 
 
 @app.command("export")
 @click.argument("name")
-@click.option("--api", default=DEFAULT_API, show_default=True)
-def app_export(name: str, api: str) -> None:
-    """Експортувати DocTypes додатку у JSON-файли."""
-    try:
-        resp = httpx.get(
-            f"{api}/api/v1/meta/doctypes",
-            headers=auth_headers(),
-            timeout=10.0,
-        )
-        resp.raise_for_status()
-        doctypes = resp.json().get("data", [])
-    except httpx.ConnectError:
-        console.print(f"[red]✗[/red] Не можу підключитись до {api}")
+def app_export(name: str) -> None:
+    """Експортувати DocTypes додатку у JSON-файли (читає з диску, сервер не потрібен)."""
+    bench = get_bench_dir()
+    if bench is None:
+        console.print("[red]✗[/red] Bench не знайдено")
         raise SystemExit(1)
 
-    out_dir = get_apps_dir() / name / "doctypes"
+    apps_dir = bench / "apps"
+    app_pkg = apps_dir / name
+    if not app_pkg.exists():
+        console.print(f"[red]✗[/red] Додаток '{name}' не знайдено в {apps_dir}")
+        raise SystemExit(1)
+
+    # Find all <Name>.json files in */doctypes/*/*/*.json pattern
+    dt_files = list(app_pkg.rglob("doctypes/*/*.json"))
+    if not dt_files:
+        console.print(f"[yellow]![/yellow] DocType JSON не знайдено в {app_pkg}")
+        return
+
+    out_dir = app_pkg / "exported_doctypes"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     exported = 0
-    for dt in doctypes:
-        dt_file = out_dir / f"{dt['name']}.json"
-        dt_file.write_text(json.dumps(dt, ensure_ascii=False, indent=2))
+    for dt_file in dt_files:
+        dest = out_dir / dt_file.name
+        dest.write_bytes(dt_file.read_bytes())
         exported += 1
 
     console.print(f"[green]✓[/green] Експортовано {exported} DocType(s) у {out_dir}")
