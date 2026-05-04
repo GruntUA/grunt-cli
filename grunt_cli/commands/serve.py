@@ -141,7 +141,11 @@ def _serve_bench(
                     pkg_dir = app_dir / app_dir.name
                     if pkg_dir.is_dir():
                         reload_dirs.append(str(pkg_dir))
-            reload_flag = "--reload " + " ".join(f"--reload-dir {d}" for d in reload_dirs)
+            reload_flag = (
+                "--reload "
+                + " ".join(f"--reload-dir {d}" for d in reload_dirs)
+                + " --reload-include '*.json'"
+            )
         else:
             reload_flag = ""
 
