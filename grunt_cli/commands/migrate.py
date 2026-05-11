@@ -137,9 +137,12 @@ async def _sync() -> None:
             async with maker() as session:
                 # Persist latest bundled core metadata into DB before app sync.
                 await load_core_doctypes(session, sync_db=True)
+                # Sync core tables FIRST so new columns (e.g. home_page on AppMenu)
+                # exist before seed_app_workspaces queries the physical tables.
+                await sync_all_doctypes(session, eng)
                 # Import/update app DocTypes from JSON files into grunt_meta_doctype.
                 await seed_app_workspaces(session, site)
-                # Ensure physical tables match the refreshed metadata.
+                # Sync again to pick up any app DocType tables registered above.
                 await sync_all_doctypes(session, eng)
 
                 # Backfill required fields with defaults for legacy rows created
