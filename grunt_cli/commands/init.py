@@ -59,6 +59,11 @@ def _init_bench(name: str, repo: str, branch: str) -> None:
     apps_dir.mkdir(exist_ok=True)
     sites_dir.mkdir(exist_ok=True)
 
+    logs_dir = bench_dir / "logs"
+    for _subdir in ("system", "web", "apps", "sites", "db", "scheduler"):
+        (logs_dir / _subdir).mkdir(parents=True, exist_ok=True)
+    console.print("[green]✓[/green] Створено структуру logs/")
+
     # Клонуємо Grunt
     grunt_dir = clone_grunt(apps_dir, repo, branch)
 

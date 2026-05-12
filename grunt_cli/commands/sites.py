@@ -59,6 +59,11 @@ def sites_new(name: str, db_url: str | None, no_migrate: bool) -> None:
 
     site_dir.mkdir(parents=True)
 
+    # Logs dirs for this site
+    _logs_dir = bench_dir / "logs"
+    (_logs_dir / "web" / name).mkdir(parents=True, exist_ok=True)
+    (_logs_dir / "sites" / name).mkdir(parents=True, exist_ok=True)
+
     # grunt.site
     site_config = {
         "framework_path": "../../apps/grunt",
