@@ -119,6 +119,48 @@ def _install_deps(path: Path, label: str) -> None:
             run_mise(path, "deps")
 
 
+def _update_runtimes() -> None:
+    """Оновити системні рантайми (Python, Node.js тощо) через mise."""
+    import shutil  # noqa: PLC0415
+    
+    # Спочатку шукаємо mise у поточному середовищі
+    mise_bin = shutil.which("mise")
+    if not mise_bin:
+        console.print("  [yellow]⚠[/yellow]  mise не знайдено, пропускаю оновлення рантаймів")
+        return
+    
+    bench = get_bench_dir()
+    if bench:
+        config_file = bench / "apps" / "grunt" / "mise.toml"
+        if config_file.exists():
+            console.print("  [dim]Оновлюю системні рантайми (Python, Node.js тощо)...[/dim]")
+            result = subprocess.run(
+                [mise_bin, "install"],
+                cwd=str(bench),
+                check=False
+            )
+            if result.returncode == 0:
+                console.print("  [green]✓[/green] Системні рантайми оновлені")
+            else:
+                console.print("  [yellow]⚠[/yellow]  Оновлення рантаймів завершилось з помилкою")
+            return
+    
+    site = get_site_dir()
+    if site and (site / "mise.toml").exists():
+        console.print("  [dim]Оновлюю системні рантайми (Python, Node.js тощо)...[/dim]")
+        result = subprocess.run(
+            [mise_bin, "install"],
+            cwd=str(site),
+            check=False
+        )
+        if result.returncode == 0:
+            console.print("  [green]✓[/green] Системні рантайми оновлені")
+        else:
+            console.print("  [yellow]⚠[/yellow]  Оновлення рантаймів завершилось з помилкою")
+    else:
+        console.print("  [dim]mise.toml не знайдено[/dim]")
+
+
 def _update_python_packages() -> None:
     """Оновити Python пакети (uv sync --upgrade або pip)."""
     import shutil  # noqa: PLC0415
@@ -269,6 +311,8 @@ def _get_cli_dir() -> Path | None:
               help="Оновити тільки фреймворк")
 @click.option("--apps", "update_apps", is_flag=True, default=False,
               help="Оновити тільки додатки")
+@click.option("--deps", "update_deps", is_flag=True, default=False,
+              help="Оновити системні залежності (Python, Node.js тощо)")
 @click.option("--skip-packages", is_flag=True, default=False,
               help="Не оновлювати Python пакети")
 @click.option("--skip-npm", is_flag=True, default=False,
@@ -279,16 +323,17 @@ def _get_cli_dir() -> Path | None:
               help="Не встановлювати залежності після оновлення")
 @click.option("--site", default=None, help="Назва сайту (для migrate)")
 def update(update_cli: bool, update_framework: bool, update_apps: bool, 
-           skip_packages: bool, skip_npm: bool, skip_migrate: bool, 
+           update_deps: bool, skip_packages: bool, skip_npm: bool, skip_migrate: bool, 
            no_deps: bool, site: str | None) -> None:
     """Оновити CLI, фреймворк, додатки, пакети та схему БД.
 
     \b
     Послідовність:
       1. git pull --rebase для CLI, фреймворку та додатків
-      2. uv sync --upgrade (Python пакети)
-      3. npm install
-      4. grunt migrate (міграція БД)
+      2. mise install (системні залежності: Python, Node.js тощо)
+      3. uv sync --upgrade (Python пакети)
+      4. npm install
+      5. grunt migrate (міграція БД)
 
     \b
     Без прапорців оновлює все.
@@ -297,12 +342,13 @@ def update(update_cli: bool, update_framework: bool, update_apps: bool,
     \b
     Приклади:
       grunt update                  оновити все
+      grunt update --deps           оновити тільки системні залежності
       grunt update --apps           тільки додатки + пакети + міграції
       grunt update --skip-migrate   без міграцій БД
       grunt update --no-deps        без перевстановлення залежностей
     """
     # Якщо жоден прапорець не вказано — оновлюємо все
-    update_all = not (update_cli or update_framework or update_apps)
+    update_all = not (update_cli or update_framework or update_apps or update_deps)
 
     console.print("[bold]⚡ Grunt Update[/bold]")
     console.print()
@@ -360,7 +406,14 @@ def update(update_cli: bool, update_framework: bool, update_apps: bool,
                     updated_something = True
         console.print()
 
-    # ── 4. Python пакети ────────────────────────────────────────────
+    # ── 4. Системні залежності (рантайми) ────────────────────────
+    if update_all or update_deps:
+        console.print("[bold cyan]Системні залежності[/bold cyan]")
+        _update_runtimes()
+        updated_something = True
+        console.print()
+
+    # ── 5. Python пакети ────────────────────────────────────────────
     if not skip_packages:
         console.print("[bold cyan]Python пакети[/bold cyan]")
         _update_python_packages()
@@ -370,7 +423,7 @@ def update(update_cli: bool, update_framework: bool, update_apps: bool,
         console.print("[dim]Python пакети пропущено (--skip-packages)[/dim]")
         console.print()
 
-    # ── 5. npm пакети ──────────────────────────────────────────────
+    # ── 6. npm пакети ──────────────────────────────────────────────
     if not skip_npm:
         console.print("[bold cyan]npm пакети[/bold cyan]")
         apps_dir = _find_apps_dir()
@@ -384,7 +437,7 @@ def update(update_cli: bool, update_framework: bool, update_apps: bool,
         console.print("[dim]npm пакети пропущено (--skip-npm)[/dim]")
         console.print()
 
-    # ── 6. Міграція БД ──────────────────────────────────────────────
+    # ── 7. Міграція БД ──────────────────────────────────────────────
     if not skip_migrate:
         console.print("[bold cyan]Міграція БД[/bold cyan]")
         _run_migrations(site)
