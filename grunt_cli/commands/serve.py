@@ -168,10 +168,36 @@ def _serve_bench(
             config_file=grunt_dir / "mise.toml"
         ))
 
+        # Tasks go to Redis when the site has REDIS_URL — someone has to take them.
+        if _redis_configured(backend_env):
+            console.print("[green]▶[/green] Worker:   TaskIQ [dim](Redis)[/dim]")
+            procs.append(run_mise_popen(
+                grunt_dir,
+                "worker",
+                env=backend_env,
+                config_file=grunt_dir / "mise.toml"
+            ))
+        else:
+            console.print("  [dim]Worker:   не потрібен (REDIS_URL не задано — задачі в процесі)[/dim]")
+
     if not backend_only:
         _start_frontend(procs, grunt_dir, bench_dir)
 
     _wait_for_procs(procs, shutdown)
+
+
+def _redis_configured(env: dict[str, str]) -> bool:
+    """True when the backend will use a Redis broker (REDIS_URL in env or the site .env)."""
+    if env.get("REDIS_URL"):
+        return True
+    dotenv = env.get("DOTENV_PATH")
+    if not dotenv or not Path(dotenv).exists():
+        return False
+    for line in Path(dotenv).read_text(encoding="utf-8").splitlines():
+        key, _, value = line.partition("=")
+        if key.strip() == "REDIS_URL" and value.strip().strip("'\""):
+            return True
+    return False
 
 
 def _start_frontend(procs: list, grunt_dir: Path, node_base_dir: Path) -> None:
