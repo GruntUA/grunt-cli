@@ -176,11 +176,22 @@ def _update_python_packages() -> None:
         cwd_dir = str(app_dir / "grunt") if app_dir else None
         if cwd_dir:
             env["PWD"] = cwd_dir
-        result = subprocess.run([uv_bin, "sync", "--upgrade"], cwd=cwd_dir, check=False, env=env)
+        # --inexact: keep packages outside the framework's lock — the apps
+        # (editable) and their dependencies, installed by `grunt app deps`.
+        result = subprocess.run(
+            [uv_bin, "sync", "--upgrade", "--all-extras", "--inexact"],
+            cwd=cwd_dir, check=False, env=env,
+        )
         if result.returncode != 0:
             console.print("  [yellow]⚠[/yellow]  uv sync --upgrade завершився з помилкою")
+            return
+        apps = subprocess.run(
+            [uv_bin, "run", "grunt", "app", "deps"], cwd=cwd_dir, check=False, env=env,
+        )
+        if apps.returncode != 0:
+            console.print("  [yellow]⚠[/yellow]  Залежності додатків не встановились (grunt app deps)")
         else:
-            console.print("  [green]✓[/green] Python пакети оновлені")
+            console.print("  [green]✓[/green] Python пакети оновлені (фреймворк + додатки)")
         return
     
     # Fallback на pip
@@ -331,7 +342,7 @@ def update(update_cli: bool, update_framework: bool, update_apps: bool,
     Послідовність:
       1. git pull --rebase для CLI, фреймворку та додатків
       2. mise install (системні залежності: Python, Node.js тощо)
-      3. uv sync --upgrade (Python пакети)
+      3. uv sync --upgrade --inexact + grunt app deps (Python пакети фреймворку й додатків)
       4. npm install
       5. grunt migrate (міграція БД)
 
