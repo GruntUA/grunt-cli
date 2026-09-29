@@ -2,66 +2,48 @@
 
 Command-line interface for managing [Grunt Framework](https://github.com/GruntUA/Grunt) projects and applications.
 
-## Requirements
-
-### 1. Install Git and mise
-
-If you don't have them yet, install **Git** and **[mise](https://mise.jdx.dev/)**:
-
-```bash
-# Install Curl (Ubuntu/Debian)
-sudo apt update && sudo apt install curl -y
-
-# Install Git (Ubuntu/Debian)
-sudo apt update && sudo apt install git -y
-
-# Install mise
-curl https://mise.jdx.dev/install.sh | sh
-```
-
-### 2. Managed Dependencies
-
-Mise will automatically install and manage:
-- **Python 3.14**
-- **Node.js**
-- **uv**
-
 ## Installation
 
-### Option 1: One-command setup (automated)
+### Option 1: One-command setup (recommended)
 
-If you are on Ubuntu/Debian, you can install everything (curl, git, Redis, mise, python, node, grunt-cli) with a single command:
+On Ubuntu/Debian you only need **curl** — the script installs everything else:
 
 ```bash
+sudo apt update && sudo apt install -y curl   # if curl is missing
 curl -fsSL https://raw.githubusercontent.com/GruntUA/grunt-cli/master/bootstrap.sh | bash
 ```
 
-The script asks whether this is a server — then it also installs nginx and sets the time zone.
+What it does:
+- installs system packages via apt: **git**, **gnupg**, **sudo**, **Redis**;
+- installs **[mise](https://mise.jdx.dev/)** and adds its activation to `~/.bashrc`;
+- clones grunt-cli into `~/.grunt-cli` and installs it; mise brings **Python 3.14**, **Node.js** and **uv**.
+
+It asks whether this is a server — then it also installs **nginx** and sets the time zone.
 Run as **root** on a fresh server, it asks for a user name (default `grunt`), creates that user
 with sudo rights and a password, and installs grunt-cli for them — continue with `su - grunt`.
+Without a terminal (CI) it takes the defaults.
 
 ### Option 2: Manual step-by-step
 
-#### 1. Install Git and mise
-
-If you don't have them yet, install **curl**, **Git** and **[mise](https://mise.jdx.dev/)**:
+#### 1. Install system packages and mise
 
 ```bash
-# Install curl and Git (Ubuntu/Debian)
-sudo apt update && sudo apt install curl git -y
+# Ubuntu/Debian
+sudo apt update && sudo apt install -y curl git redis-server
 
-# Install mise
 curl https://mise.jdx.dev/install.sh | sh
+echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.bashrc && exec bash
 ```
 
 #### 2. Install Grunt CLI
 
-Clone the repository and use `mise` to set up the environment and install the CLI globally:
+Clone the repository and use `mise` to set up the environment (Python 3.14, Node.js, uv) and install the CLI globally:
 
 ```bash
 git clone https://github.com/GruntUA/grunt-cli.git
 cd grunt-cli
 mise trust
+mise install
 mise run install
 ```
 
@@ -277,6 +259,6 @@ When working outside a project directory, downloaded apps are cached in `~/.grun
 
 ## Requirements
 
-- Python 3.14+
-- Git
-- Node.js + npm (for frontend development)
+- Ubuntu/Debian for `bootstrap.sh` (it installs everything below); other systems — manual setup
+- Git, Redis, [mise](https://mise.jdx.dev/)
+- Python 3.14, Node.js and uv — installed by mise, no need to install them yourself
