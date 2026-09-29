@@ -64,6 +64,7 @@ from grunt_cli.commands.init import init  # noqa: E402
 from grunt_cli.commands.install import install  # noqa: E402
 from grunt_cli.commands.lint import lint  # noqa: E402
 from grunt_cli.commands.master import master  # noqa: E402
+from grunt_cli.commands.restart import restart  # noqa: E402
 from grunt_cli.commands.serve import serve  # noqa: E402
 from grunt_cli.commands.setup import setup  # noqa: E402
 from grunt_cli.commands.shell import shell  # noqa: E402
@@ -76,6 +77,7 @@ from grunt_cli.commands.users import users  # noqa: E402
 cli.add_command(install)
 cli.add_command(init)
 cli.add_command(serve)
+cli.add_command(restart)
 cli.add_command(setup)
 cli.add_command(db)
 cli.add_command(doctype)

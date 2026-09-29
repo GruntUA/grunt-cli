@@ -161,6 +161,19 @@ Logs: `journalctl -u <bench>-web -u <bench>-worker -f`.
 
 ---
 
+### `grunt restart`
+
+Restart the production services installed by `grunt setup production`
+(`<bench>-web`, `<bench>-worker`) and check they came up:
+
+```bash
+grunt restart             # both
+grunt restart --web       # only uvicorn
+grunt restart --worker    # only the background worker
+```
+
+---
+
 ### `grunt app`
 
 Manage Grunt applications.

@@ -756,3 +756,63 @@ class TestFrameworkDelegation:
         result = runner.invoke(cli, ["data"])
         assert result.exit_code != 0
         assert "No such command" in result.output
+
+
+class TestRestart:
+    @patch("grunt_cli.commands.restart.time.sleep")
+    @patch("grunt_cli.commands.restart.subprocess.run")
+    def test_restarts_bench_services(self, mock_run, _sleep, runner, tmp_path, monkeypatch):
+        bench = tmp_path / "mlt_prod"
+        (bench / "apps").mkdir(parents=True)
+        (bench / "sites").mkdir()
+        units = tmp_path / "systemd"
+        units.mkdir()
+        for unit in ("mlt_prod-web.service", "mlt_prod-worker.service"):
+            (units / unit).write_text("")
+        monkeypatch.setattr("grunt_cli.commands.restart.SYSTEMD_DIR", units)
+        monkeypatch.chdir(bench)
+        mock_run.return_value = MagicMock(returncode=0, stdout="active\n")
+
+        result = runner.invoke(cli, ["restart"])
+
+        assert result.exit_code == 0, result.output
+        assert mock_run.call_args_list[0].args[0] == [
+            "sudo",
+            "systemctl",
+            "restart",
+            "mlt_prod-web.service",
+            "mlt_prod-worker.service",
+        ]
+
+    @patch("grunt_cli.commands.restart.time.sleep")
+    @patch("grunt_cli.commands.restart.subprocess.run")
+    def test_reports_service_that_did_not_start(
+        self, mock_run, _sleep, runner, tmp_path, monkeypatch
+    ):
+        bench = tmp_path / "mlt_prod"
+        (bench / "apps").mkdir(parents=True)
+        (bench / "sites").mkdir()
+        units = tmp_path / "systemd"
+        units.mkdir()
+        (units / "mlt_prod-web.service").write_text("")
+        monkeypatch.setattr("grunt_cli.commands.restart.SYSTEMD_DIR", units)
+        monkeypatch.chdir(bench)
+        mock_run.side_effect = [MagicMock(returncode=0), MagicMock(returncode=3, stdout="failed\n")]
+
+        result = runner.invoke(cli, ["restart", "--web"])
+
+        assert result.exit_code != 0
+        assert "не запустився" in result.output
+        assert "journalctl -u mlt_prod-web.service" in result.output
+
+    def test_not_installed_points_to_setup(self, runner, tmp_path, monkeypatch):
+        bench = tmp_path / "dev"
+        (bench / "apps").mkdir(parents=True)
+        (bench / "sites").mkdir()
+        monkeypatch.setattr("grunt_cli.commands.restart.SYSTEMD_DIR", tmp_path / "none")
+        monkeypatch.chdir(bench)
+
+        result = runner.invoke(cli, ["restart"])
+
+        assert result.exit_code != 0
+        assert "grunt setup production" in result.output
