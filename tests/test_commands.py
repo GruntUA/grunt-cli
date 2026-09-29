@@ -737,3 +737,22 @@ class TestMaster:
                 input=f"{tmp_path / 'existing'}\ndev.local\n",
             )
             assert result.exit_code != 0
+
+
+class TestFrameworkDelegation:
+    @patch("grunt_cli.helpers.get_dotenv_path", return_value="/bench/sites/s/.env")
+    @patch("grunt_cli.helpers.get_venv_grunt", return_value="/bench/apps/grunt/.venv/bin/grunt")
+    @patch("subprocess.run")
+    def test_unknown_command_goes_to_framework_cli(self, mock_run, _venv, _dotenv, runner):
+        mock_run.return_value = MagicMock(returncode=0)
+        result = runner.invoke(cli, ["data", "import", "/tmp/b.tar", "--yes"])
+        assert result.exit_code == 0, result.output
+        cmd = mock_run.call_args.args[0]
+        assert cmd == ["/bench/apps/grunt/.venv/bin/grunt", "data", "import", "/tmp/b.tar", "--yes"]
+        assert mock_run.call_args.kwargs["env"]["DOTENV_PATH"] == "/bench/sites/s/.env"
+
+    @patch("grunt_cli.helpers.get_venv_grunt", return_value=None)
+    def test_unknown_command_outside_project(self, _venv, runner):
+        result = runner.invoke(cli, ["data"])
+        assert result.exit_code != 0
+        assert "No such command" in result.output

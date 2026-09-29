@@ -12,7 +12,39 @@ import click
 from grunt_cli import __version__
 
 
-@click.group()
+class _DelegatingGroup(click.Group):
+    """Команди, яких немає в grunt-cli, передає CLI фреймворку проєкту
+    (``apps/grunt/.venv/bin/grunt``): ``grunt data export``, ``grunt files gc`` тощо."""
+
+    def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
+        command = super().get_command(ctx, cmd_name)
+        if command is not None:
+            return command
+        from grunt_cli.helpers import get_dotenv_path, get_venv_grunt  # noqa: PLC0415
+
+        framework_cli = get_venv_grunt()
+        if framework_cli is None:
+            return None
+
+        @click.command(
+            cmd_name,
+            add_help_option=False,
+            context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+        )
+        @click.argument("args", nargs=-1, type=click.UNPROCESSED)
+        def _framework_command(args: tuple[str, ...]) -> None:
+            import subprocess  # noqa: PLC0415
+
+            env = {**os.environ}
+            if dotenv := get_dotenv_path():
+                env["DOTENV_PATH"] = dotenv
+            result = subprocess.run([framework_cli, cmd_name, *args], env=env)
+            raise SystemExit(result.returncode)
+
+        return _framework_command
+
+
+@click.group(cls=_DelegatingGroup)
 @click.version_option(version=__version__, prog_name="Ґрунт CLI")
 def cli() -> None:
     """⚡ Ґрунт CLI — встановлення та управління Grunt-проєктами."""
