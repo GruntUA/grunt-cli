@@ -374,20 +374,56 @@ class TestApp:
             config = json.loads((site / "grunt.site").read_text())
             assert "my_app" in config["installed_apps"]
 
-    @patch("grunt_cli.commands.app.subprocess.run")
+    @patch("grunt_cli.helpers.subprocess.run")
     def test_app_get(self, mock_run, runner, tmp_path):
-        mock_run.return_value = MagicMock(returncode=0)
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
         with patch("grunt_cli.commands.app.get_apps_dir", return_value=tmp_path):
             result = runner.invoke(cli, ["app", "get", "https://github.com/test/repo.git"])
             assert result.exit_code == 0
             mock_run.assert_called_once()
 
-    @patch("grunt_cli.commands.app.subprocess.run")
+    @patch("grunt_cli.helpers.subprocess.run")
     def test_app_get_failure(self, mock_run, runner, tmp_path):
-        mock_run.return_value = MagicMock(returncode=1)
+        mock_run.return_value = MagicMock(returncode=1, stderr="fatal: something broke")
         with patch("grunt_cli.commands.app.get_apps_dir", return_value=tmp_path):
             result = runner.invoke(cli, ["app", "get", "https://github.com/test/repo.git"])
             assert result.exit_code != 0
+
+    @patch("grunt_cli.helpers._ask_github_token")
+    @patch("grunt_cli.helpers.subprocess.run")
+    def test_app_get_private_repo_without_tty_does_not_ask_token(
+        self, mock_run, mock_ask, runner, tmp_path
+    ):
+        mock_run.return_value = MagicMock(returncode=128, stderr="remote: Repository not found.")
+        with patch("grunt_cli.commands.app.get_apps_dir", return_value=tmp_path):
+            result = runner.invoke(cli, ["app", "get", "https://github.com/test/repo"])
+        assert result.exit_code != 0
+        assert "приватний" in result.output
+        mock_ask.assert_not_called()
+        mock_run.assert_called_once()
+
+    @patch("grunt_cli.helpers.sys.stdin")
+    @patch("grunt_cli.helpers._ask_github_token", return_value=True)
+    @patch("grunt_cli.helpers.subprocess.run")
+    def test_git_clone_retries_after_token(self, mock_run, mock_ask, mock_stdin, tmp_path):
+        from grunt_cli.helpers import git_clone
+
+        mock_stdin.isatty.return_value = True
+        mock_run.side_effect = [
+            MagicMock(returncode=128, stderr="fatal: could not read Username"),
+            MagicMock(returncode=0, stderr=""),
+        ]
+        assert git_clone("https://github.com/owner/repo", tmp_path) is True
+        mock_ask.assert_called_once_with("owner/repo")
+        assert mock_run.call_count == 2
+
+    def test_github_repo_path(self):
+        from grunt_cli.helpers import _github_repo_path
+
+        assert _github_repo_path("https://github.com/owner/repo.git") == "owner/repo.git"
+        assert _github_repo_path("https://github.com/owner/repo/") == "owner/repo"
+        assert _github_repo_path("git@github.com:owner/repo.git") is None
+        assert _github_repo_path("https://gitlab.com/owner/repo") is None
 
 
 # ── grunt doctype ───────────────────────────────────────────────

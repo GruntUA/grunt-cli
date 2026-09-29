@@ -9,7 +9,11 @@ Command-line interface for managing [Grunt Framework](https://github.com/GruntUA
 On Ubuntu/Debian you only need **curl** — the script installs everything else:
 
 ```bash
-sudo apt update && sudo apt install -y curl   # if curl is missing
+# if curl is missing: as root (fresh server, no sudo yet)
+apt update && apt install -y curl
+# ...or as a regular user
+sudo apt update && sudo apt install -y curl
+
 curl -fsSL https://raw.githubusercontent.com/GruntUA/grunt-cli/master/bootstrap.sh | bash
 ```
 

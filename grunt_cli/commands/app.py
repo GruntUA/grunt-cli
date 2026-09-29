@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 import click
@@ -15,6 +14,7 @@ from grunt_cli.helpers import (
     get_apps_dir,
     get_bench_dir,
     get_current_site,
+    git_clone,
     venv_delegate,
 )
 
@@ -75,14 +75,8 @@ def app_get(repo_url: str, branch: str | None) -> None:
     apps_dir = get_apps_dir()
     apps_dir.mkdir(parents=True, exist_ok=True)
 
-    cmd = ["git", "clone", "--depth", "1"]
-    if branch:
-        cmd.extend(["--branch", branch])
-    cmd.append(repo_url)
-
     console.print(f"[dim]Клоную {repo_url}...[/dim]")
-    result = subprocess.run(cmd, cwd=str(apps_dir))
-    if result.returncode != 0:
+    if not git_clone(repo_url, apps_dir, branch=branch):
         console.print("[red]✗[/red] Не вдалося клонувати репозиторій")
         raise SystemExit(1)
 

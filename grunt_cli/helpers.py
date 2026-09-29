@@ -342,20 +342,120 @@ def run_mise_popen(
 def clone_grunt(target_dir: Path, repo: str = GRUNT_REPO_URL, branch: str = "master") -> Path:
     """Клонує Grunt framework в target_dir/grunt. Повертає шлях до grunt."""
     console.print(f"[dim]Клоную Grunt framework з {repo}...[/dim]")
-    result = subprocess.run(["git", "--version"], capture_output=True)
-    if result.returncode != 0:
-        console.print("[red]✗[/red] [bold]git[/bold] не знайдено. Встановіть його.")
-        raise SystemExit(1)
-
-    result = subprocess.run(
-        ["git", "clone", "--branch", branch, "--depth", "1", repo, "grunt"],
-        cwd=str(target_dir),
-    )
-    if result.returncode != 0:
+    if not git_clone(repo, target_dir, dest="grunt", branch=branch):
         console.print("[red]✗[/red] Не вдалося клонувати репозиторій")
         raise SystemExit(1)
     console.print("[green]✓[/green] Grunt framework клоновано")
     return target_dir / "grunt"
+
+
+# Що пише git, коли https-репозиторій приватний, а доступу немає (GitHub на
+# приватний репо без прав відповідає так само, як на неіснуючий).
+_GIT_AUTH_ERRORS = (
+    "repository not found",
+    "authentication failed",
+    "could not read username",
+    "terminal prompts disabled",
+    "403",
+)
+
+
+def git_clone(repo: str, cwd: Path, *, dest: str | None = None, branch: str | None = None) -> bool:
+    """``git clone --depth 1``; для приватного https-репо на GitHub пропонує ввести токен.
+
+    Токен зберігається через git credential helper окремо для цього репозиторію
+    (``credential.useHttpPath``), тож ``git pull`` / ``grunt update`` потім теж
+    працюють, а репозиторії різних власників можуть мати різні токени.
+    """
+    if shutil.which("git") is None:
+        console.print("[red]✗[/red] [bold]git[/bold] не знайдено. Встановіть його.")
+        raise SystemExit(1)
+
+    cmd = ["git", "clone", "--depth", "1"]
+    if branch:
+        cmd += ["--branch", branch]
+    cmd.append(repo)
+    if dest:
+        cmd.append(dest)
+    # Без інтерактивного запиту логіна від git — токен питаємо самі.
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    github_path = _github_repo_path(repo)
+
+    for attempt in range(2):
+        result = subprocess.run(cmd, cwd=str(cwd), env=env, capture_output=True, text=True)
+        if result.returncode == 0:
+            return True
+        stderr = result.stderr.strip()
+        is_auth_error = any(marker in stderr.lower() for marker in _GIT_AUTH_ERRORS)
+        can_ask = attempt == 0 and is_auth_error and github_path and sys.stdin.isatty()
+        if not can_ask:
+            if stderr:
+                console.print(f"[dim]{stderr}[/dim]")
+            if is_auth_error and github_path:
+                console.print(
+                    "[yellow]![/yellow] Репозиторій приватний або не існує. Перевірте адресу "
+                    "і доступ токена (Contents: Read-only саме на цей репозиторій)."
+                )
+            return False
+        if not _ask_github_token(github_path):
+            return False
+    return False
+
+
+def _github_repo_path(repo: str) -> str | None:
+    """``owner/name`` для https-адреси GitHub, інакше None (ssh, інші хости)."""
+    from urllib.parse import urlparse  # noqa: PLC0415
+
+    url = urlparse(repo)
+    if url.scheme != "https" or url.hostname != "github.com":
+        return None
+    return url.path.strip("/") or None
+
+
+def _ask_github_token(path: str) -> bool:
+    """Питає токен GitHub для ``owner/name`` і зберігає його для git. False — відмова."""
+    import click  # noqa: PLC0415
+
+    owner, name = path.split("/")[0], path.split("/")[-1].removesuffix(".git")
+    console.print()
+    console.print(
+        f"[yellow]![/yellow] Немає доступу до [bold]github.com/{path}[/bold] — "
+        "репозиторій приватний (або адреса неправильна)."
+    )
+    console.print(
+        "  Створіть токен: [cyan]https://github.com/settings/personal-access-tokens/new[/cyan]\n"
+        f"  Resource owner: [bold]{owner}[/bold] → Only select repositories → [bold]{name}[/bold]\n"
+        "  → Permissions: Contents [bold]Read-only[/bold]."
+    )
+    token = click.prompt(
+        "  Токен (Enter — пропустити)", default="", hide_input=True, show_default=False
+    ).strip()
+    if not token:
+        return False
+
+    # Токен — окремо для кожного репозиторію, а не на весь github.com.
+    subprocess.run(
+        ["git", "config", "--global", "credential.https://github.com.useHttpPath", "true"],
+        check=False,
+    )
+    helper = subprocess.run(
+        ["git", "config", "--global", "credential.helper"], capture_output=True, text=True
+    ).stdout.strip()
+    if not helper:
+        subprocess.run(["git", "config", "--global", "credential.helper", "store"], check=False)
+        console.print("  [dim]Токени зберігаються у ~/.git-credentials[/dim]")
+
+    # git шукає облікові дані за шляхом з URL як він є (з .git чи без).
+    credential = f"protocol=https\nhost=github.com\npath={path}\nusername=x-access-token\n"
+    subprocess.run(["git", "credential", "reject"], input=credential + "\n", text=True, check=False)
+    subprocess.run(
+        ["git", "credential", "approve"],
+        input=f"{credential}password={token}\n\n",
+        text=True,
+        check=False,
+    )
+    console.print("  [dim]Повторюю клонування...[/dim]")
+    return True
 
 
 def find_uv() -> str | None:
