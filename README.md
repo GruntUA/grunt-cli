@@ -139,6 +139,27 @@ fine-grained token and stores it for that repository only.
 
 ---
 
+### `grunt setup production`
+
+Turn the active site into a production deployment behind Cloudflare:
+
+```bash
+grunt setup production [--site mlt.gov.ua] [--port 8000]
+```
+
+It asks for the domain(s) and an optional Cloudflare Origin Certificate, then:
+1. sets `DEBUG=false`, `APP_URL`, `ALLOWED_ORIGINS`, `REDIS_URL` (and a real `SECRET_KEY`) in the site `.env`;
+2. builds the frontend (`npm run build`);
+3. writes `config/production/`: `<bench>-web.service` (uvicorn, one process),
+   `<bench>-worker.service` (taskiq) and an nginx site that takes the visitor IP
+   from `CF-Connecting-IP` only for Cloudflare addresses;
+4. after confirmation installs them with `sudo`, restarts the services and nginx, and checks the site answers.
+
+With a certificate use Cloudflare SSL/TLS mode **Full (strict)**, without one — **Flexible**.
+Logs: `journalctl -u <bench>-web -u <bench>-worker -f`.
+
+---
+
 ### `grunt app`
 
 Manage Grunt applications.

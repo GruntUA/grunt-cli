@@ -1,0 +1,17 @@
+# {{ name }} ({{ site }}) — згенеровано `grunt setup production`.
+[Unit]
+Description=Grunt background worker — {{ site }}
+After=network.target redis-server.service
+Wants=redis-server.service
+
+[Service]
+User={{ user }}
+WorkingDirectory={{ grunt_dir }}
+Environment=DOTENV_PATH={{ env_file }}
+Environment=PATH={{ grunt_dir }}/.venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart={{ grunt_dir }}/.venv/bin/taskiq worker grunt.tasks.worker:broker --workers 1
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
