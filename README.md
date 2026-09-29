@@ -30,11 +30,15 @@ Mise will automatically install and manage:
 
 ### Option 1: One-command setup (automated)
 
-If you are on Ubuntu/Debian, you can install everything (curl, git, mise, python, node, grunt-cli) with a single command:
+If you are on Ubuntu/Debian, you can install everything (curl, git, Redis, mise, python, node, grunt-cli) with a single command:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/GruntUA/grunt-cli/master/bootstrap.sh | bash
 ```
+
+The script asks whether this is a server — then it also installs nginx and sets the time zone.
+Run as **root** on a fresh server, it asks for a user name (default `grunt`), creates that user
+with sudo rights and a password, and installs grunt-cli for them — continue with `su - grunt`.
 
 ### Option 2: Manual step-by-step
 
