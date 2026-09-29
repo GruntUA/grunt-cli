@@ -43,6 +43,12 @@ server {
 {%- for cidr in cloudflare_ranges %}
     set_real_ip_from {{ cidr }};
 {%- endfor %}
+{%- if proxies %}
+    # Тунель / проксі між Cloudflare і цим сервером.
+{%- for proxy in proxies %}
+    set_real_ip_from {{ proxy }};
+{%- endfor %}
+{%- endif %}
     real_ip_header CF-Connecting-IP;
 
     proxy_http_version 1.1;

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import getpass
+import ipaddress
 import json
 import re
 import secrets
@@ -90,6 +91,22 @@ def production(site: str | None, port: int) -> None:
         default=f"www.{domain}" if not domain.startswith("www.") else "",
         show_default=True,
     ).split()
+    console.print(
+        "[dim]Якщо Cloudflare доходить до сервера не напряму, а через Cloudflare Tunnel\n"
+        "(cloudflared) чи проксі на іншій машині — вкажіть її IP, щоб nginx довіряв\n"
+        "CF-Connecting-IP і від неї.[/dim]"
+    )
+    proxies = click.prompt(
+        "IP тунелю/проксі через пробіл, Enter — Cloudflare напряму",
+        default="",
+        show_default=False,
+    ).split()
+    for proxy in proxies:
+        try:
+            ipaddress.ip_network(proxy, strict=False)
+        except ValueError:
+            console.print(f"[red]✗[/red] Не IP-адреса чи мережа: {proxy}")
+            raise SystemExit(1) from None
     ssl_cert = ssl_key = ""
     console.print(
         "[dim]Cloudflare → сервер: для режиму SSL «Full (strict)» потрібен Origin Certificate\n"
@@ -145,6 +162,7 @@ def production(site: str | None, port: int) -> None:
         "ssl_key": ssl_key,
         "max_body_mb": int(env.get("MAX_UPLOAD_SIZE_MB") or 50) + 10,
         "cloudflare_ranges": CLOUDFLARE_RANGES,
+        "proxies": proxies,
     }
     files = {
         f"{name}.nginx.conf": "nginx.conf.j2",

@@ -147,7 +147,8 @@ Turn the active site into a production deployment behind Cloudflare:
 grunt setup production [--site mlt.gov.ua] [--port 8000]
 ```
 
-It asks for the domain(s) and an optional Cloudflare Origin Certificate, then:
+It asks for the domain(s), the IP of a Cloudflare Tunnel (`cloudflared`) / proxy host in between
+(if Cloudflare does not reach the server directly) and an optional Cloudflare Origin Certificate, then:
 1. sets `DEBUG=false`, `APP_URL`, `ALLOWED_ORIGINS`, `REDIS_URL` (and a real `SECRET_KEY`) in the site `.env`;
 2. builds the frontend (`npm run build`);
 3. writes `config/production/`: `<bench>-web.service` (uvicorn, one process),
