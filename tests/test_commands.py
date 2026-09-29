@@ -389,7 +389,7 @@ class TestApp:
             result = runner.invoke(cli, ["app", "get", "https://github.com/test/repo.git"])
             assert result.exit_code != 0
 
-    @patch("grunt_cli.helpers._ask_github_token")
+    @patch("grunt_cli.helpers.ask_github_token")
     @patch("grunt_cli.helpers.subprocess.run")
     def test_app_get_private_repo_without_tty_does_not_ask_token(
         self, mock_run, mock_ask, runner, tmp_path
@@ -403,7 +403,7 @@ class TestApp:
         mock_run.assert_called_once()
 
     @patch("grunt_cli.helpers.sys.stdin")
-    @patch("grunt_cli.helpers._ask_github_token", return_value=True)
+    @patch("grunt_cli.helpers.ask_github_token", return_value=True)
     @patch("grunt_cli.helpers.subprocess.run")
     def test_git_clone_retries_after_token(self, mock_run, mock_ask, mock_stdin, tmp_path):
         from grunt_cli.helpers import git_clone
@@ -418,12 +418,12 @@ class TestApp:
         assert mock_run.call_count == 2
 
     def test_github_repo_path(self):
-        from grunt_cli.helpers import _github_repo_path
+        from grunt_cli.helpers import github_repo_path
 
-        assert _github_repo_path("https://github.com/owner/repo.git") == "owner/repo.git"
-        assert _github_repo_path("https://github.com/owner/repo/") == "owner/repo"
-        assert _github_repo_path("git@github.com:owner/repo.git") is None
-        assert _github_repo_path("https://gitlab.com/owner/repo") is None
+        assert github_repo_path("https://github.com/owner/repo.git") == "owner/repo.git"
+        assert github_repo_path("https://github.com/owner/repo/") == "owner/repo"
+        assert github_repo_path("git@github.com:owner/repo.git") is None
+        assert github_repo_path("https://gitlab.com/owner/repo") is None
 
 
 # ── grunt doctype ───────────────────────────────────────────────
@@ -591,6 +591,37 @@ class TestUpdate:
 
         result = runner.invoke(cli, ["update", "--cli", "--no-deps"])
         assert result.exit_code == 0
+
+    @patch("grunt_cli.commands.update._run_migrations")
+    @patch("grunt_cli.commands.update._run_npm_install")
+    @patch("grunt_cli.commands.update._update_python_packages")
+    @patch("grunt_cli.commands.update.run_mise", return_value=True)
+    @patch("grunt_cli.commands.update.subprocess.run")
+    @patch("grunt_cli.commands.update._get_cli_dir")
+    def test_update_cli_argument_reinstalls_cli_only(
+        self,
+        mock_cli_dir,
+        mock_run,
+        mock_mise,
+        mock_packages,
+        mock_npm,
+        mock_migrate,
+        runner,
+        tmp_path,
+    ):
+        cli_dir = tmp_path / "grunt-cli"
+        (cli_dir / ".git").mkdir(parents=True)
+        mock_cli_dir.return_value = cli_dir
+        mock_run.return_value = MagicMock(returncode=0, stdout="abc1234", stderr="")
+
+        result = runner.invoke(cli, ["update", "cli"])
+
+        assert result.exit_code == 0, result.output
+        assert "grunt-cli оновлено" in result.output
+        mock_mise.assert_any_call(cli_dir, "run", "install")
+        mock_packages.assert_not_called()
+        mock_npm.assert_not_called()
+        mock_migrate.assert_not_called()
 
 
 # ── grunt master ───────────────────────────────────────────────

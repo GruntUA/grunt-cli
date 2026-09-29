@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import click
 
 from grunt_cli.helpers import (
+    ask_github_token,
     console,
     find_uv,
     get_bench_dir,
-    get_site_dir,
     get_current_site,
+    get_site_dir,
+    github_repo_path,
     run_mise,
 )
 
@@ -42,20 +46,37 @@ def _git_pull(path: Path, label: str) -> bool:
 
     console.print(f"  [dim]Оновлюю {label} ({branch})...[/dim]")
 
-    result = subprocess.run(
-        ["git", "pull", "--rebase", "--autostash"],
-        cwd=str(path),
-        capture_output=True,
-        text=True,
-    )
+    # Без інтерактивного запиту логіна від git — токен питаємо самі.
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    remote = subprocess.run(
+        ["git", "remote", "get-url", "origin"], cwd=str(path), capture_output=True, text=True
+    ).stdout.strip()
+    github_path = github_repo_path(remote)
+
+    for attempt in range(2):
+        result = subprocess.run(
+            ["git", "pull", "--rebase", "--autostash"],
+            cwd=str(path),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        auth_error = result.returncode != 0 and any(
+            marker in result.stderr.lower()
+            for marker in ("could not read username", "authentication failed", "not found")
+        )
+        if not (auth_error and attempt == 0 and github_path and sys.stdin.isatty()):
+            break
+        if not ask_github_token(github_path):
+            break
 
     if result.returncode != 0:
         stderr = result.stderr.strip()
-        if "could not read Username" in stderr or "Authentication failed" in stderr:
-            console.print(f"  [yellow]⚠[/yellow]  {label}: немає доступу до GitHub")
-            console.print("    [dim]Налаштуйте SSH-ключ або git credentials:[/dim]")
-            console.print("    [dim]  ssh-keygen -t ed25519 && ssh-add ~/.ssh/id_ed25519[/dim]")
-            console.print("    [dim]  git remote set-url origin git@github.com:ORG/REPO.git[/dim]")
+        if auth_error:
+            console.print(f"  [yellow]⚠[/yellow]  {label}: немає доступу до {remote}")
+            console.print(
+                "    [dim]Запустіть grunt update у терміналі — він запитає токен GitHub[/dim]"
+            )
         else:
             console.print(f"  [red]✗[/red] {label}: помилка git pull")
             if stderr:
@@ -118,7 +139,7 @@ def _install_deps(path: Path, label: str) -> None:
             tasks = tomllib.load(f).get("tasks", {})
         if "deps" in tasks:
             console.print(f"  [dim]Встановлюю пакети для {label} (mise run deps)...[/dim]")
-            run_mise(path, "deps")
+            run_mise(path, "run", "deps")
 
 
 def _update_runtimes() -> None:
@@ -157,9 +178,8 @@ def _update_runtimes() -> None:
 
 def _update_python_packages() -> None:
     """Оновити Python пакети (uv sync --upgrade або pip)."""
-    import shutil  # noqa: PLC0415
-    import sys  # noqa: PLC0415
     import os  # noqa: PLC0415
+    import shutil  # noqa: PLC0415
 
     # Перевіряємо наявність uv
     uv_bin = find_uv()
@@ -316,7 +336,11 @@ def _get_cli_dir() -> Path | None:
     return None
 
 
+_COMPONENTS = ("cli", "framework", "apps", "deps")
+
+
 @click.command()
+@click.argument("component", required=False, type=click.Choice(_COMPONENTS))
 @click.option("--cli", "update_cli", is_flag=True, default=False, help="Оновити тільки CLI")
 @click.option(
     "--framework", "update_framework", is_flag=True, default=False, help="Оновити тільки фреймворк"
@@ -337,6 +361,7 @@ def _get_cli_dir() -> Path | None:
 )
 @click.option("--site", default=None, help="Назва сайту (для migrate)")
 def update(
+    component: str | None,
     update_cli: bool,
     update_framework: bool,
     update_apps: bool,
@@ -364,13 +389,23 @@ def update(
     \b
     Приклади:
       grunt update                  оновити все
+      grunt update cli              оновити тільки сам grunt-cli
+      grunt update framework        тільки фреймворк (+ пакети, npm, міграції)
       grunt update --deps           оновити тільки системні залежності
       grunt update --apps           тільки додатки + пакети + міграції
       grunt update --skip-migrate   без міграцій БД
       grunt update --no-deps        без перевстановлення залежностей
     """
+    # `grunt update cli` == `grunt update --cli` тощо
+    update_cli = update_cli or component == "cli"
+    update_framework = update_framework or component == "framework"
+    update_apps = update_apps or component == "apps"
+    update_deps = update_deps or component == "deps"
+
     # Якщо жоден прапорець не вказано — оновлюємо все
     update_all = not (update_cli or update_framework or update_apps or update_deps)
+    # Лише CLI — пакети, npm і міграції проєкту не чіпаємо (можна й поза проєктом).
+    cli_only = update_cli and not (update_framework or update_apps or update_deps)
 
     console.print("[bold]⚡ Grunt Update[/bold]")
     console.print()
@@ -386,7 +421,11 @@ def update(
         else:
             _git_pull(cli_dir, "grunt-cli")
             if not no_deps:
-                _install_deps(cli_dir, "grunt-cli")
+                # editable-встановлення підхоплює код і так, а нові залежності
+                # CLI ставить лише перевстановлення (mise-задача install).
+                console.print("  [dim]Встановлюю grunt-cli (mise run install)...[/dim]")
+                run_mise(cli_dir, "install")
+                run_mise(cli_dir, "run", "install")
             updated_something = True
         console.print()
 
@@ -435,6 +474,10 @@ def update(
         _update_runtimes()
         updated_something = True
         console.print()
+
+    if cli_only:
+        console.print("[bold green]✅ grunt-cli оновлено[/bold green]")
+        return
 
     # ── 5. Python пакети ────────────────────────────────────────────
     if not skip_packages:

@@ -379,7 +379,7 @@ def git_clone(repo: str, cwd: Path, *, dest: str | None = None, branch: str | No
         cmd.append(dest)
     # Без інтерактивного запиту логіна від git — токен питаємо самі.
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-    github_path = _github_repo_path(repo)
+    github_path = github_repo_path(repo)
 
     for attempt in range(2):
         result = subprocess.run(cmd, cwd=str(cwd), env=env, capture_output=True, text=True)
@@ -397,12 +397,12 @@ def git_clone(repo: str, cwd: Path, *, dest: str | None = None, branch: str | No
                     "і доступ токена (Contents: Read-only саме на цей репозиторій)."
                 )
             return False
-        if not _ask_github_token(github_path):
+        if not ask_github_token(github_path):
             return False
     return False
 
 
-def _github_repo_path(repo: str) -> str | None:
+def github_repo_path(repo: str) -> str | None:
     """``owner/name`` для https-адреси GitHub, інакше None (ssh, інші хости)."""
     from urllib.parse import urlparse  # noqa: PLC0415
 
@@ -412,7 +412,7 @@ def _github_repo_path(repo: str) -> str | None:
     return url.path.strip("/") or None
 
 
-def _ask_github_token(path: str) -> bool:
+def ask_github_token(path: str) -> bool:
     """Питає токен GitHub для ``owner/name`` і зберігає його для git. False — відмова."""
     import click  # noqa: PLC0415
 
