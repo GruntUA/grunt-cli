@@ -36,16 +36,18 @@ def shell(site: str | None) -> None:
     bench = get_bench_dir()
 
     if bench is not None:
-        python_exe = _find_python(bench / ".venv")
-        backend_dir = bench / "apps" / "grunt" / "backend"
+        backend_dir = bench / "apps" / "grunt"
+        python_exe = _find_python(backend_dir / ".venv")
         cwd = _resolve_site_dir(bench, site)
     else:
         site_dir = get_site_dir()
         if site_dir is None:
-            console.print("[red]✗[/red] grunt.site не знайдено. Перейди у директорію Grunt-проєкту.")
+            console.print(
+                "[red]✗[/red] grunt.site не знайдено. Перейди у директорію Grunt-проєкту."
+            )
             raise SystemExit(1)
-        python_exe = _find_python(site_dir / ".venv")
-        backend_dir = site_dir / "apps" / "grunt" / "backend"
+        backend_dir = site_dir / "apps" / "grunt"
+        python_exe = _find_python(backend_dir / ".venv")
         cwd = str(site_dir)
 
     if not backend_dir.exists():

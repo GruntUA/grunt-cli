@@ -17,11 +17,15 @@ def fixtures() -> None:
 
 @fixtures.command("dump")
 @click.argument("doctype")
-@click.option("-o", "--output", default=None, help="Вихідний файл (за замовчуванням: <doctype>_fixtures.json)")
+@click.option(
+    "-o", "--output", default=None, help="Вихідний файл (за замовчуванням: <doctype>_fixtures.json)"
+)
 @click.option("--limit", default=None, type=int, help="Максимум записів")
 @click.option("--filters", default=None, help='JSON фільтри, напр. {"status": "Active"}')
 @click.option("--site", default=None, help="Назва сайту")
-def fixtures_dump(doctype: str, output: str | None, limit: int | None, filters: str | None, site: str | None) -> None:
+def fixtures_dump(
+    doctype: str, output: str | None, limit: int | None, filters: str | None, site: str | None
+) -> None:
     """Експортувати записи DocType у JSON файл.
 
     \b
@@ -70,8 +74,12 @@ asyncio.run(_run())
 
 @fixtures.command("load")
 @click.argument("file", type=click.Path(exists=True))
-@click.option("--mode", type=click.Choice(["create", "upsert", "update"]), default="create",
-              help="Режим: create (помилка якщо існує), upsert, update")
+@click.option(
+    "--mode",
+    type=click.Choice(["create", "upsert", "update"]),
+    default="create",
+    help="Режим: create (помилка якщо існує), upsert, update",
+)
 @click.option("--skip-errors", is_flag=True, help="Продовжити при помилках")
 @click.option("--site", default=None, help="Назва сайту")
 def fixtures_load(file: str, mode: str, skip_errors: bool, site: str | None) -> None:

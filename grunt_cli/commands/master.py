@@ -136,10 +136,9 @@ def master(repo: str, branch: str) -> None:
     # 8. Встановлення всього через mise
     run_mise(project_dir, "install")
 
-    # 10. Міграції
-    if (grunt_dir / "backend").exists():
-        console.print("[dim]Застосовую міграції...[/dim]")
-        run_mise(site_dir, "db:migrate")
+    # 10. Залежності, bootstrap і міграції
+    console.print("[dim]Налаштування середовища та бази даних...[/dim]")
+    run_mise(grunt_dir, "setup", env={"DOTENV_PATH": str(site_dir / ".env")})
 
     # ── 11. Адміністратор ─────────────────────────────────────────────
     console.print()
@@ -150,11 +149,16 @@ def master(repo: str, branch: str) -> None:
 
         # Створюємо адміна напряму через backend CLI (без сервера)
         from grunt_cli.helpers import venv_delegate  # noqa: PLC0415
+
         rc = venv_delegate(
-            "users", "create",
-            "--email", email,
-            "--password", password,
-            "--full-name", full_name,
+            "users",
+            "create",
+            "--email",
+            email,
+            "--password",
+            password,
+            "--full-name",
+            full_name,
             site=site_name,
         )
         if rc == 0:
@@ -163,7 +167,9 @@ def master(repo: str, branch: str) -> None:
             console.print(f"[yellow]⚠[/yellow] Не вдалося створити адміна автоматично.")
             console.print("Після запуску: [cyan]grunt users create[/cyan]")
         else:
-            console.print("[yellow]⚠[/yellow] Backend CLI не знайдено. Після запуску: [cyan]grunt users create[/cyan]")
+            console.print(
+                "[yellow]⚠[/yellow] Backend CLI не знайдено. Після запуску: [cyan]grunt users create[/cyan]"
+            )
 
     # ── 12. Фінал ─────────────────────────────────────────────────────
     console.print()
@@ -175,9 +181,17 @@ def master(repo: str, branch: str) -> None:
         import os
 
         from grunt_cli.commands.serve import serve as serve_cmd
+
         os.chdir(str(project_dir))
         ctx = click.Context(serve_cmd, info_name="serve")
-        ctx.invoke(serve_cmd, host="0.0.0.0", port=port, no_reload=False, backend_only=False, frontend_only=False)
+        ctx.invoke(
+            serve_cmd,
+            host="0.0.0.0",
+            port=port,
+            no_reload=False,
+            backend_only=False,
+            frontend_only=False,
+        )
     else:
         console.print("Для запуску:")
         console.print(f"  [cyan]cd {project_name}[/cyan]")

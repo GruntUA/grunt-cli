@@ -62,11 +62,7 @@ def install(project_name: str, repo: str, branch: str) -> None:
     (sites_dir / "currentsite.txt").write_text("default")
 
     # 4. .env
-    env_content = (
-        "DEBUG=true\n"
-        "DATABASE_URL=sqlite+aiosqlite:///./grunt.db\n"
-        "SECRET_KEY=change-me\n"
-    )
+    env_content = "DEBUG=true\nDATABASE_URL=sqlite+aiosqlite:///./grunt.db\nSECRET_KEY=change-me\n"
     (site_dir / ".env").write_text(env_content)
 
     # 5. Встановлення всього через mise

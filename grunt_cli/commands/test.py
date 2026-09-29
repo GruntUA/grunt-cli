@@ -8,6 +8,7 @@ from pathlib import Path
 import click
 from grunt_cli.helpers import console, get_bench_dir, find_uv
 
+
 @click.command(context_settings={"ignore_unknown_options": True, "allow_extra_args": True})
 @click.argument("args", nargs=-1, type=click.UNPROCESSED)
 def test(args: tuple[str, ...]) -> None:
@@ -18,18 +19,31 @@ def test(args: tuple[str, ...]) -> None:
     В іншому випадку спробує запустити внутрішні тести CLI.
     """
     cwd = Path.cwd()
-    
+
+    # 0. Bench mode: delegate entirely to the project venv's grunt test
+    bench = get_bench_dir()
+    if bench:
+        venv_grunt = bench / ".venv" / "bin" / "grunt"
+        if venv_grunt.exists():
+            console.print(f"[dim]Bench виявлено у {bench}. Делегую до venv grunt test...[/dim]")
+            grunt_app_root = bench / "apps" / "grunt"
+            result = subprocess.run(
+                [str(venv_grunt), "test", *args],
+                cwd=str(grunt_app_root) if grunt_app_root.is_dir() else str(bench),
+            )
+            raise SystemExit(result.returncode)
+
     # 1. Шукаємо проектний pyproject.toml
     project_root = None
     for parent in [cwd, *cwd.parents]:
         if (parent / "pyproject.toml").exists():
             project_root = parent
             break
-            
+
     if project_root:
         console.print(f"[dim]Виявлено проект у {project_root}. Запускаю проектні тести...[/dim]")
         uv_bin = find_uv()
-        
+
         # Перевіряємо, чи є папка backend/tests або tests
         t_paths = ["backend/tests", "tests"]
         found_t = None
@@ -37,18 +51,18 @@ def test(args: tuple[str, ...]) -> None:
             if (project_root / p).is_dir():
                 found_t = p
                 break
-        
+
         cmd = []
         if uv_bin:
             cmd = [uv_bin, "run", "pytest"]
         else:
             cmd = ["pytest"]
-            
+
         if found_t and not args:
             cmd.append(found_t)
-            
+
         cmd.extend(args)
-        
+
         result = subprocess.run(cmd, cwd=str(project_root))
         raise SystemExit(result.returncode)
 

@@ -88,13 +88,19 @@ def app_get(repo_url: str, branch: str | None) -> None:
 
     # Визначаємо назву завантаженого додатку (остання частина URL без .git)
     app_name = repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
-    console.print(f"[green]✓[/green] Додаток [bold]{app_name}[/bold] завантажено до {apps_dir / app_name}")
-    console.print(f"  Тепер встанови його: [cyan]grunt app install {app_name} --site localhost[/cyan]")
+    console.print(
+        f"[green]✓[/green] Додаток [bold]{app_name}[/bold] завантажено до {apps_dir / app_name}"
+    )
+    console.print(
+        f"  Тепер встанови його: [cyan]grunt app install {app_name} --site localhost[/cyan]"
+    )
 
 
 @app.command("install")
 @click.argument("name")
-@click.option("--site", default=None, help="Ім'я сайту (за замовчуванням: автовизначення)", metavar="SITE")
+@click.option(
+    "--site", default=None, help="Ім'я сайту (за замовчуванням: автовизначення)", metavar="SITE"
+)
 def app_install(name: str, site: str | None) -> None:
     """Встановити додаток: DocTypes, fixtures, workspace, after_install.
 
@@ -121,22 +127,19 @@ def app_install(name: str, site: str | None) -> None:
         console.print("  Спочатку завантаж додаток: [cyan]grunt app get <repo_url>[/cyan]")
         raise SystemExit(1)
 
-    backend_dir = bench / "apps" / "grunt" / "backend"
+    backend_dir = bench / "apps" / "grunt"
     if not backend_dir.exists():
         console.print(f"[red]✗[/red] Grunt framework не знайдено: {backend_dir}")
         raise SystemExit(1)
 
-    # Знаходимо Python у venv bench
-    python_exe = str(bench / ".venv" / "bin" / "python")
-    if not Path(python_exe).exists():
-        # Fallback 1: .venv у самому додатку grunt (framework)
-        python_exe = str(apps_dir / "grunt" / ".venv" / "bin" / "python")
-    
+    # Python з venv фреймворку (apps/grunt/.venv)
+    python_exe = str(backend_dir / ".venv" / "bin" / "python")
     if not Path(python_exe).exists():
         python_exe = sys.executable
 
     # Знаходимо site dir для cwd
     from grunt_cli.commands.shell import _resolve_site_dir  # noqa: PLC0415
+
     cwd = _resolve_site_dir(bench, site)
 
     env = {**os.environ, "PYTHONPATH": str(backend_dir)}
@@ -185,6 +188,7 @@ def app_uninstall(name: str, site: str | None, yes: bool) -> None:
 
     if resolved_site_dir is None and site is None:
         from grunt_cli.helpers import get_current_site
+
         resolved_site_dir_maybe = get_current_site()
         if resolved_site_dir_maybe is not None:
             resolved_site_dir = resolved_site_dir_maybe
@@ -195,7 +199,9 @@ def app_uninstall(name: str, site: str | None, yes: bool) -> None:
         site_config = json.loads(site_file.read_text())
         installed = site_config.get("installed_apps", [])
         if name not in installed:
-            console.print(f"[yellow]![/yellow] Додаток '{name}' не встановлено на {resolved_site_dir.name}")
+            console.print(
+                f"[yellow]![/yellow] Додаток '{name}' не встановлено на {resolved_site_dir.name}"
+            )
             return
 
         if not yes:
@@ -207,13 +213,17 @@ def app_uninstall(name: str, site: str | None, yes: bool) -> None:
         installed.remove(name)
         site_config["installed_apps"] = installed
         site_file.write_text(json.dumps(site_config, ensure_ascii=False, indent=2))
-        console.print(f"[green]✓[/green] Додаток [bold]{name}[/bold] видалено з сайту [cyan]{resolved_site_dir.name}[/cyan]")
+        console.print(
+            f"[green]✓[/green] Додаток [bold]{name}[/bold] видалено з сайту [cyan]{resolved_site_dir.name}[/cyan]"
+        )
         console.print(f"  [dim]Додатки: {', '.join(installed)}[/dim]")
         console.print(f"  [dim]Файли додатку залишено у apps/{name}/[/dim]")
         return
 
     # Fallback: no local site found — cannot uninstall without site info
-    console.print("[red]✗[/red] Сайт не знайдено. Вкажи [cyan]--site <name>[/cyan] або запустіть у папці проекту.")
+    console.print(
+        "[red]✗[/red] Сайт не знайдено. Вкажи [cyan]--site <name>[/cyan] або запустіть у папці проекту."
+    )
     raise SystemExit(1)
 
 

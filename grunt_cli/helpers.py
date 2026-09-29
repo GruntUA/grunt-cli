@@ -26,6 +26,7 @@ _LOCAL_HOSTS = {"localhost", "127.0.0.1"}
 # Site / Bench discovery
 # ---------------------------------------------------------------------------
 
+
 def get_site_dir() -> Path | None:
     """Повертає директорію поточного Grunt-сайту.
     Шукає grunt.site у поточній директорії та батьківських.
@@ -71,7 +72,7 @@ def get_current_site() -> Path | None:
                 site_path = bench / "sites" / name
                 if (site_path / "grunt.site").exists():
                     return site_path
-    
+
     # Якщо нема в файлі — повертаємо поточну папку (якщо це сайт)
     return get_site_dir()
 
@@ -79,6 +80,7 @@ def get_current_site() -> Path | None:
 # ---------------------------------------------------------------------------
 # API / Auth helpers
 # ---------------------------------------------------------------------------
+
 
 def resolve_site_api(site: str) -> str:
     """Перетворює ідентифікатор сайту на базовий API URL.
@@ -237,6 +239,7 @@ def run_venv_script(script: str, site: str | None = None) -> int:
 # Dependency installation helpers
 # ---------------------------------------------------------------------------
 
+
 def get_mise_bin() -> str | None:
     """Знаходить шлях до mise."""
     mise_bin = shutil.which("mise")
@@ -253,7 +256,9 @@ def get_mise_bin() -> str | None:
     return mise_bin
 
 
-def run_mise(cwd: Path, *args: str, env: dict[str, str] | None = None, config_file: Path | None = None) -> bool:
+def run_mise(
+    cwd: Path, *args: str, env: dict[str, str] | None = None, config_file: Path | None = None
+) -> bool:
     """Виконує команду mise у вказаній директорії (блокує)."""
     mise_bin = get_mise_bin()
     if not mise_bin:
@@ -267,8 +272,21 @@ def run_mise(cwd: Path, *args: str, env: dict[str, str] | None = None, config_fi
     subprocess.run(trust_cmd, cwd=str(cwd), capture_output=True)
 
     cmd = [str(mise_bin)]
-    if args and args[0] in {"setup", "test", "lint", "fmt", "build", "db:migrate", "serve", "dev", "bootstrap", "backend", "frontend", "worker"}:
-         cmd.extend(["run"])
+    if args and args[0] in {
+        "setup",
+        "test",
+        "lint",
+        "fmt",
+        "build",
+        "db:migrate",
+        "serve",
+        "dev",
+        "bootstrap",
+        "backend",
+        "frontend",
+        "worker",
+    }:
+        cmd.extend(["run"])
     cmd.extend(args)
 
     final_env = {**os.environ, **(env or {})}
@@ -279,10 +297,16 @@ def run_mise(cwd: Path, *args: str, env: dict[str, str] | None = None, config_fi
     return result.returncode == 0
 
 
-def run_mise_popen(cwd: Path, *args: str, env: dict[str, str] | None = None, config_file: Path | None = None, **kwargs) -> subprocess.Popen:
+def run_mise_popen(
+    cwd: Path,
+    *args: str,
+    env: dict[str, str] | None = None,
+    config_file: Path | None = None,
+    **kwargs,
+) -> subprocess.Popen:
     """Запускає команду mise у вказаній директорії (не блокує)."""
     mise_bin = get_mise_bin() or "mise"
-    
+
     # Trust
     trust_cmd = [str(mise_bin), "trust"]
     if config_file:
@@ -290,8 +314,21 @@ def run_mise_popen(cwd: Path, *args: str, env: dict[str, str] | None = None, con
     subprocess.run(trust_cmd, cwd=str(cwd), capture_output=True)
 
     cmd = [str(mise_bin)]
-    if args and args[0] in {"setup", "test", "lint", "fmt", "build", "db:migrate", "serve", "dev", "bootstrap", "backend", "frontend", "worker"}:
-         cmd.extend(["run"])
+    if args and args[0] in {
+        "setup",
+        "test",
+        "lint",
+        "fmt",
+        "build",
+        "db:migrate",
+        "serve",
+        "dev",
+        "bootstrap",
+        "backend",
+        "frontend",
+        "worker",
+    }:
+        cmd.extend(["run"])
     cmd.extend(args)
 
     final_env = {**os.environ, **(env or {})}
@@ -305,9 +342,7 @@ def run_mise_popen(cwd: Path, *args: str, env: dict[str, str] | None = None, con
 def clone_grunt(target_dir: Path, repo: str = GRUNT_REPO_URL, branch: str = "master") -> Path:
     """Клонує Grunt framework в target_dir/grunt. Повертає шлях до grunt."""
     console.print(f"[dim]Клоную Grunt framework з {repo}...[/dim]")
-    result = subprocess.run(
-        ["git", "--version"], capture_output=True
-    )
+    result = subprocess.run(["git", "--version"], capture_output=True)
     if result.returncode != 0:
         console.print("[red]✗[/red] [bold]git[/bold] не знайдено. Встановіть його.")
         raise SystemExit(1)

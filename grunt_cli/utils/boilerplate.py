@@ -74,7 +74,9 @@ def make_boilerplate(dest: Path, app_name: str, no_git: bool = False) -> None:
 # ── Interactive prompts ───────────────────────────────────────────────────────
 
 
-def _prompt_validated(prompt_text: str, validator, error_msg: str, default: str | None = None) -> str:
+def _prompt_validated(
+    prompt_text: str, validator, error_msg: str, default: str | None = None
+) -> str:
     while True:
         if default is not None:
             value = click.prompt(prompt_text, default=default)

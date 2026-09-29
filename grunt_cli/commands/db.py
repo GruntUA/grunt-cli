@@ -32,15 +32,17 @@ def _resolve_db_context(site_name: str | None) -> tuple[Path, Path, dict]:
                 )
                 raise SystemExit(1)
 
-        backend_dir = bench_dir / "apps" / "grunt" / "backend"
-        venv_dir = bench_dir / ".venv"
+        backend_dir = bench_dir / "apps" / "grunt"
+        venv_dir = backend_dir / ".venv"
     else:
         site_dir = get_site_dir()
         if site_dir is None:
-            console.print("[red]✗[/red] grunt.site не знайдено. Перейди у директорію Grunt-проекту.")
+            console.print(
+                "[red]✗[/red] grunt.site не знайдено. Перейди у директорію Grunt-проекту."
+            )
             raise SystemExit(1)
-        backend_dir = site_dir / "apps" / "grunt" / "backend"
-        venv_dir = site_dir / ".venv"
+        backend_dir = site_dir / "apps" / "grunt"
+        venv_dir = backend_dir / ".venv"
 
     venv_bin = venv_dir / "bin"
     env = {
@@ -85,7 +87,9 @@ def db_migrate(ctx: click.Context, dry_run: bool) -> None:
         cmd.extend(["--sql"])
         console.print(f"[dim]Сайт: {site_dir.name} (сухе запущення)[/dim]\n")
         result = subprocess.run(cmd, cwd=str(site_dir), env=env)
-        console.print("\n[yellow]![/yellow] Це лише показ. Для застосування запусти без [cyan]--dry-run[/cyan]")
+        console.print(
+            "\n[yellow]![/yellow] Це лише показ. Для застосування запусти без [cyan]--dry-run[/cyan]"
+        )
         sys.exit(result.returncode)
 
     console.print(f"[dim]Сайт: {site_dir.name}[/dim]")

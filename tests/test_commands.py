@@ -42,6 +42,7 @@ class TestInstall:
         (project / "some-file").write_text("x")
         with runner.isolated_filesystem(temp_dir=tmp_path):
             import os
+
             os.chdir(tmp_path)
             result = runner.invoke(cli, ["install", str(project)])
             assert result.exit_code != 0
@@ -193,40 +194,74 @@ class TestDb:
 
 
 class TestMigrate:
-    @patch("grunt_cli.commands.migrate.subprocess.run")
-    def test_migrate_without_site_runs_all_bench_sites(self, mock_run, runner, tmp_path, monkeypatch):
+    """`grunt migrate` runs alembic (core tables) then delegates DocType/fixture
+    sync to `grunt migrate` in the project venv — no duplicate implementation."""
+
+    def _make_bench(self, tmp_path: Path) -> Path:
         bench = tmp_path / "bench"
         app_dir = bench / "apps" / "grunt"
-        backend_dir = app_dir / "backend"
-        backend_dir.mkdir(parents=True)
-        (backend_dir / "alembic.ini").write_text("[alembic]\n")
+        venv_bin = app_dir / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        (app_dir / "alembic.ini").write_text("[alembic]\n")
+        (venv_bin / "alembic").touch()
+        (venv_bin / "grunt").touch()
 
         site_a = bench / "sites" / "a.local"
-        site_b = bench / "sites" / "b.local"
         site_a.mkdir(parents=True)
-        site_b.mkdir(parents=True)
         (site_a / "grunt.site").write_text("{}")
-        (site_b / "grunt.site").write_text("{}")
-        (site_a / ".env").write_text("DEBUG=true\n")
-        (site_b / ".env").write_text("DEBUG=true\n")
 
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="✓ a.local\n✓ b.local\n", stderr=""),
-            MagicMock(returncode=0),
-        ]
+        return bench
+
+    @patch("grunt_cli.commands.migrate.subprocess.run")
+    def test_migrate_without_site_delegates_to_venv_grunt(
+        self, mock_run, runner, tmp_path, monkeypatch
+    ):
+        bench = self._make_bench(tmp_path)
+        mock_run.return_value = MagicMock(returncode=0)
 
         monkeypatch.chdir(bench)
         result = runner.invoke(cli, ["migrate"])
 
         assert result.exit_code == 0
-        assert "Сайти: всі (2)" in result.output
+        assert mock_run.call_count == 2
 
-        sync_cmd = mock_run.call_args_list[0][0][0]
-        assert sync_cmd[1] == "-c"
-        assert "TARGET_SITE = None" in sync_cmd[2]
+        alembic_cmd = mock_run.call_args_list[0][0][0]
+        assert alembic_cmd[0].endswith("/apps/grunt/.venv/bin/alembic")
+        assert alembic_cmd[1:] == [
+            "-c",
+            str(bench / "apps" / "grunt" / "alembic.ini"),
+            "upgrade",
+            "head",
+        ]
 
-        assert (site_a / ".reload_meta").exists()
-        assert (site_b / ".reload_meta").exists()
+        delegated_cmd = mock_run.call_args_list[1][0][0]
+        assert delegated_cmd[0].endswith("/apps/grunt/.venv/bin/grunt")
+        assert delegated_cmd[1:] == ["migrate"]
+
+    @patch("grunt_cli.commands.migrate.subprocess.run")
+    def test_migrate_with_site_passes_through(self, mock_run, runner, tmp_path, monkeypatch):
+        bench = self._make_bench(tmp_path)
+        mock_run.return_value = MagicMock(returncode=0)
+
+        monkeypatch.chdir(bench)
+        result = runner.invoke(cli, ["migrate", "--site", "a.local", "--dry-run"])
+
+        assert result.exit_code == 0
+        delegated_cmd = mock_run.call_args_list[1][0][0]
+        assert delegated_cmd[1:] == ["migrate", "--site", "a.local", "--dry-run"]
+
+    @patch("grunt_cli.commands.migrate.subprocess.run")
+    def test_migrate_alembic_failure_stops_before_delegating(
+        self, mock_run, runner, tmp_path, monkeypatch
+    ):
+        bench = self._make_bench(tmp_path)
+        mock_run.return_value = MagicMock(returncode=1)
+
+        monkeypatch.chdir(bench)
+        result = runner.invoke(cli, ["migrate"])
+
+        assert result.exit_code == 1
+        assert mock_run.call_count == 1  # never reaches the delegated call
 
 
 # ── grunt auth ──────────────────────────────────────────────────
@@ -244,7 +279,8 @@ class TestAuth:
         fake_token = tmp_path / ".grunt_token"
         with patch("grunt_cli.helpers.token_file", return_value=fake_token):
             result = runner.invoke(
-                cli, ["auth", "login"],
+                cli,
+                ["auth", "login"],
                 input="admin@test.com\npassword123\n",
             )
             assert result.exit_code == 0
@@ -258,7 +294,8 @@ class TestAuth:
         mock_post.return_value = mock_resp
 
         result = runner.invoke(
-            cli, ["auth", "login"],
+            cli,
+            ["auth", "login"],
             input="wrong@test.com\nwrongpass\n",
         )
         assert "Невірний" in result.output
@@ -266,10 +303,12 @@ class TestAuth:
     @patch("grunt_cli.commands.auth.httpx.post")
     def test_login_server_unavailable(self, mock_post, runner):
         import httpx
+
         mock_post.side_effect = httpx.ConnectError("Connection refused")
 
         result = runner.invoke(
-            cli, ["auth", "login"],
+            cli,
+            ["auth", "login"],
             input="admin@test.com\npassword123\n",
         )
         assert "недоступний" in result.output
@@ -394,6 +433,7 @@ class TestDoctype:
     @patch("grunt_cli.commands.doctype.auth_headers")
     def test_doctype_list_server_unavailable(self, mock_auth, mock_get, runner):
         import httpx
+
         mock_auth.return_value = {"Authorization": "Bearer tok"}
         mock_get.side_effect = httpx.ConnectError("Connection refused")
 
@@ -526,7 +566,13 @@ class TestMaster:
     @patch("grunt_cli.commands.master.clone_grunt")
     @patch("grunt_cli.commands.master.run_alembic", return_value=True)
     def test_master_creates_bench_sqlite(
-        self, mock_alembic, mock_clone, mock_venv, mock_npm, runner, tmp_path,
+        self,
+        mock_alembic,
+        mock_clone,
+        mock_venv,
+        mock_npm,
+        runner,
+        tmp_path,
     ):
         mock_clone.return_value = tmp_path / "my-bench" / "apps" / "grunt"
 
@@ -553,7 +599,13 @@ class TestMaster:
     @patch("grunt_cli.commands.master.clone_grunt")
     @patch("grunt_cli.commands.master.run_alembic", return_value=True)
     def test_master_creates_bench_postgres(
-        self, mock_alembic, mock_clone, mock_venv, mock_npm, runner, tmp_path,
+        self,
+        mock_alembic,
+        mock_clone,
+        mock_venv,
+        mock_npm,
+        runner,
+        tmp_path,
     ):
         mock_clone.return_value = tmp_path / "proj" / "apps" / "grunt"
 
@@ -573,7 +625,13 @@ class TestMaster:
     @patch("grunt_cli.commands.master.clone_grunt")
     @patch("grunt_cli.commands.master.run_alembic", return_value=True)
     def test_master_creates_bench_mysql(
-        self, mock_alembic, mock_clone, mock_venv, mock_npm, runner, tmp_path,
+        self,
+        mock_alembic,
+        mock_clone,
+        mock_venv,
+        mock_npm,
+        runner,
+        tmp_path,
     ):
         mock_clone.return_value = tmp_path / "proj" / "apps" / "grunt"
 
@@ -592,13 +650,19 @@ class TestMaster:
     @patch("grunt_cli.commands.master.ensure_venv")
     @patch("grunt_cli.commands.master.clone_grunt")
     def test_master_existing_dir_fails(
-        self, mock_clone, mock_venv, mock_npm, runner, tmp_path,
+        self,
+        mock_clone,
+        mock_venv,
+        mock_npm,
+        runner,
+        tmp_path,
     ):
         (tmp_path / "existing").mkdir()
         (tmp_path / "existing" / "file").write_text("x")
 
         with runner.isolated_filesystem(temp_dir=tmp_path):
             import os
+
             os.chdir(tmp_path)
             result = runner.invoke(
                 cli,

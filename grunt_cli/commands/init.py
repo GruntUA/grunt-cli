@@ -45,6 +45,7 @@ def init(name: str | None, repo: str, branch: str) -> None:
 # grunt init <name> — створення bench
 # ---------------------------------------------------------------------------
 
+
 def _init_bench(name: str, repo: str, branch: str) -> None:
     bench_dir = Path(name).resolve()
 
@@ -83,7 +84,10 @@ def _init_bench(name: str, repo: str, branch: str) -> None:
 # grunt init (без аргументу) — ініціалізація поточного сайту
 # ---------------------------------------------------------------------------
 
-def _create_user_direct(grunt_dir: Path, site_dir: Path, email: str, password: str, full_name: str) -> None:
+
+def _create_user_direct(
+    grunt_dir: Path, site_dir: Path, email: str, password: str, full_name: str
+) -> None:
     """Створює користувача напрямо в БД через backend grunt CLI (без запущеного сервера)."""
     import os  # noqa: PLC0415
 
@@ -94,8 +98,17 @@ def _create_user_direct(grunt_dir: Path, site_dir: Path, email: str, password: s
 
     env_path = site_dir / ".env"
     result = subprocess.run(
-        [str(venv_grunt), "users", "create",
-         "--email", email, "--password", password, "--full-name", full_name],
+        [
+            str(venv_grunt),
+            "users",
+            "create",
+            "--email",
+            email,
+            "--password",
+            password,
+            "--full-name",
+            full_name,
+        ],
         cwd=str(grunt_dir),
         env={**os.environ, "DOTENV_PATH": str(env_path)},
         capture_output=True,
@@ -149,17 +162,11 @@ def _init_site() -> None:
             console.print("[green]✓[/green] SECRET_KEY згенеровано")
 
     # 2. Setup (Sync dependencies + Bootstrap + Migrate)
-    backend_dir = grunt_dir / "backend"
-    if backend_dir.exists():
-        console.print("[dim]Налаштування середовища та бази даних...[/dim]")
-        ok = run_mise(
-            grunt_dir,
-            "setup",
-            env={"DOTENV_PATH": str(site_dir / ".env")}
-        )
-        if not ok:
-            console.print("[red]✗[/red] Ініціалізація сайту не завершилась")
-            raise SystemExit(1)
+    console.print("[dim]Налаштування середовища та бази даних...[/dim]")
+    ok = run_mise(grunt_dir, "setup", env={"DOTENV_PATH": str(site_dir / ".env")})
+    if not ok:
+        console.print("[red]✗[/red] Ініціалізація сайту не завершилась")
+        raise SystemExit(1)
 
     # 3. Адміністратор — створюємо напряму в БД через backend CLI
     console.print()

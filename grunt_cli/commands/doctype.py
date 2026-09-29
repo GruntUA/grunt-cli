@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
-import subprocess
 
 import click
 from rich import box
@@ -15,7 +13,6 @@ from grunt_cli.helpers import (
     console,
     find_doctype_json,
     get_bench_dir,
-    get_current_site,
     run_venv_script,
     venv_delegate,
 )
@@ -92,6 +89,7 @@ def doctype_test_gen(name: str, output: str | None) -> None:
 
     if output:
         from pathlib import Path  # noqa: PLC0415
+
         out = Path(output)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(content, encoding="utf-8")
@@ -102,26 +100,26 @@ def doctype_test_gen(name: str, output: str | None) -> None:
 
 
 _FIELDTYPE_TO_PY: dict[str, str] = {
-    "Data":        "str | None",
-    "Text":        "str | None",
-    "LongText":    "str | None",
-    "RichText":    "str | None",
-    "Code":        "str | None",
-    "Select":      "str | None",
-    "Link":        "str | None",
-    "Attach":      "str | None",
-    "Image":       "str | None",
-    "Color":       "str | None",
-    "Signature":   "str | None",
-    "Int":         "int | None",
-    "Float":       "float | None",
-    "Check":       "bool",
-    "Date":        "datetime.date | None",
-    "Datetime":    "datetime.datetime | None",
-    "Time":        "datetime.time | None",
-    "JSON":        "dict | list | None",
+    "Data": "str | None",
+    "Text": "str | None",
+    "LongText": "str | None",
+    "RichText": "str | None",
+    "Code": "str | None",
+    "Select": "str | None",
+    "Link": "str | None",
+    "Attach": "str | None",
+    "Image": "str | None",
+    "Color": "str | None",
+    "Signature": "str | None",
+    "Int": "int | None",
+    "Float": "float | None",
+    "Check": "bool",
+    "Date": "datetime.date | None",
+    "Datetime": "datetime.datetime | None",
+    "Time": "datetime.time | None",
+    "JSON": "dict | list | None",
     "Geolocation": "dict | None",
-    "MultiLink":   "list[str]",
+    "MultiLink": "list[str]",
 }
 
 _NON_PHYSICAL = {"Section", "Column", "Tab", "Empty"}
@@ -130,16 +128,15 @@ _NON_PHYSICAL = {"Section", "Column", "Tab", "Empty"}
 def _make_controller(name: str, fields: list[dict] | None = None) -> str:
     skip_names = {"name", "id", "docstatus", "owner", "created_at", "modified_at", "modified_by"}
     physical = [
-        f for f in (fields or [])
+        f
+        for f in (fields or [])
         if f.get("fieldtype") not in _NON_PHYSICAL and f.get("fieldname") not in skip_names
     ]
 
-    needs_datetime = any(
-        f["fieldtype"] in {"Date", "Datetime", "Time"} for f in physical
-    )
+    needs_datetime = any(f["fieldtype"] in {"Date", "Datetime", "Time"} for f in physical)
     datetime_import = "import datetime\n" if needs_datetime else ""
 
-    I = "    "   # 4-space indent
+    I = "    "  # 4-space indent
     II = I * 2  # 8-space indent
 
     if physical:
@@ -215,22 +212,22 @@ def _make_controller(name: str, fields: list[dict] | None = None) -> str:
 def _fake_value(fieldtype: str, fieldname: str, options: str | None = None) -> object:
     """Generate a realistic fake value for a field type."""
     mapping: dict[str, object] = {
-        "Data":        f"Test {fieldname.replace('_', ' ').title()}",
-        "Text":        f"Test {fieldname} value",
-        "LongText":    f"Long text for {fieldname}",
-        "Int":         42,
-        "Float":       3.14,
-        "Check":       True,
-        "Date":        "2026-01-15",
-        "Datetime":    "2026-01-15T10:00:00",
-        "Time":        "10:00:00",
-        "Color":       "#2D6A4F",
-        "RichText":    "<p>Test content</p>",
-        "Code":        "# test code",
-        "Rating":      4,
-        "Percent":     75.0,
-        "Duration":    3600.0,
-        "JSON":        {},
+        "Data": f"Test {fieldname.replace('_', ' ').title()}",
+        "Text": f"Test {fieldname} value",
+        "LongText": f"Long text for {fieldname}",
+        "Int": 42,
+        "Float": 3.14,
+        "Check": True,
+        "Date": "2026-01-15",
+        "Datetime": "2026-01-15T10:00:00",
+        "Time": "10:00:00",
+        "Color": "#2D6A4F",
+        "RichText": "<p>Test content</p>",
+        "Code": "# test code",
+        "Rating": 4,
+        "Percent": 75.0,
+        "Duration": 3600.0,
+        "JSON": {},
     }
     if fieldtype == "Select" and options:
         first_opt = options.split("\n")[0].strip()
@@ -243,18 +240,48 @@ def _generate_tests(dt: dict) -> str:
     snake = name.lower().replace(" ", "_")
     fields = dt.get("fields", [])
 
-    skip_types = {"Section", "Column", "Tab", "Table", "Empty", "Attach", "Image",
-                  "MultiLink", "Link", "Geolocation", "Signature", "BarCode", "HTMLEditor"}
-    skip_names = {"name", "id", "docstatus", "idx", "owner", "creation",
-                  "modified", "modified_at", "modified_by", "created_at", "created_by"}
+    skip_types = {
+        "Section",
+        "Column",
+        "Tab",
+        "Table",
+        "Empty",
+        "Attach",
+        "Image",
+        "MultiLink",
+        "Link",
+        "Geolocation",
+        "Signature",
+        "BarCode",
+        "HTMLEditor",
+    }
+    skip_names = {
+        "name",
+        "id",
+        "docstatus",
+        "idx",
+        "owner",
+        "creation",
+        "modified",
+        "modified_at",
+        "modified_by",
+        "created_at",
+        "created_by",
+    }
 
     required_fields = [
-        f for f in fields
-        if f.get("required") and f["fieldtype"] not in skip_types and f["fieldname"] not in skip_names
+        f
+        for f in fields
+        if f.get("required")
+        and f["fieldtype"] not in skip_types
+        and f["fieldname"] not in skip_names
     ]
     optional_fields = [
-        f for f in fields
-        if not f.get("required") and f["fieldtype"] not in skip_types and f["fieldname"] not in skip_names
+        f
+        for f in fields
+        if not f.get("required")
+        and f["fieldtype"] not in skip_types
+        and f["fieldname"] not in skip_names
     ][:3]  # take up to 3 optional fields for the update test
 
     def fields_dict(flist: list) -> str:
@@ -276,7 +303,8 @@ def _generate_tests(dt: dict) -> str:
     )
 
     missing_required_comment = (
-        "# No required fields defined — empty payload may succeed" if not required_fields
+        "# No required fields defined — empty payload may succeed"
+        if not required_fields
         else "# Required fields omitted intentionally"
     )
     missing_required_expected = (
@@ -433,7 +461,10 @@ def doctype_export(name: str, output: str | None) -> None:
 
     output_file = output or f"{name}.json"
     from pathlib import Path  # noqa: PLC0415
-    Path(output_file).write_text(json.dumps({"doctype": dt}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    Path(output_file).write_text(
+        json.dumps({"doctype": dt}, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
     console.print(f"[green]✓[/green] Експортовано DocType [cyan]{name}[/cyan]")
     console.print(f"  Файл: [dim]{output_file}[/dim]")
@@ -533,11 +564,14 @@ def doctype_sync(name: str, site: str | None, force: bool) -> None:
 @click.option("--app", default=None, help="Застосувати всі DocTypes з вказаного додатку")
 @click.option("--all", "all_apps", is_flag=True, help="Застосувати всі DocTypes з усіх додатків")
 @click.option("--site", default=None, help="Назва сайту")
-def doctype_apply(names: tuple[str, ...], app: str | None, all_apps: bool, site: str | None) -> None:
+def doctype_apply(
+    names: tuple[str, ...], app: str | None, all_apps: bool, site: str | None
+) -> None:
     """Застосувати DocType JSON з диска прямо в БД — без HTTP і авторизації.
 
     Реєструє нові DocTypes і оновлює існуючі разом із синхронізацією схеми таблиці.
-    Запускається через venv проекту — сервер не потрібен.
+    Для кожного знайденого DocType делегує до `grunt doctype sync` у venv проекту —
+    реалізація реєстрації/оновлення живе тільки там, тут лише виявлення файлів.
 
     \b
     Приклади:
@@ -545,140 +579,52 @@ def doctype_apply(names: tuple[str, ...], app: str | None, all_apps: bool, site:
       grunt doctype apply --app int_map
       grunt doctype apply --all
     """
-    import os  # noqa: PLC0415
-    import subprocess  # noqa: PLC0415
-    import sys  # noqa: PLC0415
-
-    from grunt_cli.helpers import get_bench_dir, get_current_site, get_site_dir  # noqa: PLC0415
-
     bench_dir = get_bench_dir()
-    if bench_dir:
-        site_dir = (
-            (bench_dir / "sites" / site) if site
-            else get_current_site()
-        )
-        backend_dir = bench_dir / "apps" / "grunt" / "backend"
-        venv_dir = bench_dir / ".venv"
-        apps_root = bench_dir / "apps"
-    else:
-        site_dir = get_site_dir()
-        backend_dir = Path.cwd() / "apps" / "grunt" / "backend"
-        venv_dir = Path.cwd() / ".venv"
-        apps_root = Path.cwd() / "apps"
-
-    if not site_dir:
-        console.print("[red]✗[/red] Сайт не знайдено")
+    if not bench_dir:
+        console.print("[red]✗[/red] Bench не знайдено. Запустіть у папці проекту.")
         raise SystemExit(1)
+    apps_root = bench_dir / "apps"
 
-    # Collect JSON files
-    json_files: list[Path] = []
-
+    dt_names: list[str]
     if names:
-        for name in names:
-            matches = list(apps_root.glob(f"**/{name}/{name}.json"))
-            if not matches:
-                console.print(f"  [yellow]![/yellow] {name}: JSON не знайдено в {apps_root}")
-            else:
-                json_files.extend(matches)
+        dt_names = list(names)
     elif app:
         app_path = apps_root / app
         if not app_path.exists():
             console.print(f"[red]✗[/red] Додаток '{app}' не знайдено в {apps_root}")
             raise SystemExit(1)
-        json_files.extend(sorted(app_path.glob("**/doctypes/*/*.json")))
+        dt_names = sorted({p.stem for p in app_path.glob("**/doctypes/*/*.json")})
     elif all_apps:
-        json_files.extend(sorted(apps_root.glob("**/doctypes/*/*.json")))
+        dt_names = sorted({p.stem for p in apps_root.glob("**/doctypes/*/*.json")})
     else:
-        console.print("[red]✗[/red] Вкажи [cyan]NAME[/cyan], [cyan]--app APP[/cyan] або [cyan]--all[/cyan]")
+        console.print(
+            "[red]✗[/red] Вкажи [cyan]NAME[/cyan], [cyan]--app APP[/cyan] або [cyan]--all[/cyan]"
+        )
         raise SystemExit(1)
 
-    if not json_files:
+    if not dt_names:
         console.print("[yellow]Нічого застосовувати[/yellow]")
         return
 
-    # Build inline Python script executed in the grunt venv
-    json_paths_repr = repr([str(p) for p in json_files])
-    script = f"""
-import asyncio, json, sys
-from pathlib import Path
-from sqlalchemy import update as sa_update
-from grunt.core.db.system_tables import GruntMetaDoctype
-from grunt.core.metadata.compiler import sync_table
-from grunt.core.metadata.doctype import DocType
-from grunt.core.metadata.registry import doctype_registry
-from grunt.core.site.manager import current_site, site_manager
-from grunt.core.startup import load_core_doctypes
+    errors = 0
+    for dt_name in dt_names:
+        rc = venv_delegate("doctype", "sync", dt_name, site=site)
+        if rc == -1:
+            console.print("[red]✗[/red] Backend CLI не знайдено. Запустіть у папці проекту.")
+            raise SystemExit(1)
+        if rc != 0:
+            errors += 1
 
-async def main():
-    sites = site_manager.get_sites()
-    target = sites[0] if sites else None
-    if not target:
-        print("ERROR: no sites found"); sys.exit(1)
-    token = current_site.set(target)
-    try:
-        eng = site_manager.get_engine(target)
-        maker = site_manager.get_session_maker(target)
-        json_files = {json_paths_repr}
-        registered = updated = errors = 0
-        async with maker() as session:
-            await doctype_registry.load_all(session)
-            await load_core_doctypes(session, eng)
-            for path in json_files:
-                dt_name = Path(path).stem
-                try:
-                    dt_data = json.loads(Path(path).read_text(encoding="utf-8"))
-                    dt_obj = DocType.model_validate(dt_data)
-                    if dt_name in doctype_registry._doctypes:
-                        await session.execute(
-                            sa_update(GruntMetaDoctype)
-                            .where(GruntMetaDoctype.name == dt_name)
-                            .values(module=dt_obj.module, data=dt_obj.model_dump(mode="json"))
-                        )
-                        doctype_registry._doctypes[dt_name] = dt_obj
-                        await sync_table(dt_obj, eng, session=session)
-                        await session.flush()
-                        print(f"  ~ {{dt_name}}: оновлено")
-                        updated += 1
-                    else:
-                        await doctype_registry.register(dt_obj, session, eng)
-                        await session.flush()
-                        print(f"  + {{dt_name}}: зареєстровано")
-                        registered += 1
-                except Exception as e:
-                    print(f"  ! {{dt_name}}: {{e}}", file=sys.stderr)
-                    errors += 1
-            await session.commit()
-        parts = []
-        if registered: parts.append(f"{{registered}} зареєстровано")
-        if updated:    parts.append(f"{{updated}} оновлено")
-        if errors:     parts.append(f"{{errors}} помилок")
-        print("\\n" + ", ".join(parts) if parts else "\\nЗмін не було")
-    finally:
-        current_site.reset(token)
-
-asyncio.run(main())
-"""
-
-    python_bin = venv_dir / "bin" / "python"
-    env = {
-        **os.environ,
-        "DOTENV_PATH": str(site_dir / ".env"),
-        "PYTHONPATH": str(backend_dir),
-        "VIRTUAL_ENV": str(venv_dir),
-        "PATH": str(venv_dir / "bin") + os.pathsep + os.environ.get("PATH", ""),
-    }
-
-    result = subprocess.run(
-        [str(python_bin), "-c", script],
-        env=env,
-        cwd=str(bench_dir or Path.cwd()),
-    )
-    sys.exit(result.returncode)
+    raise SystemExit(1 if errors else 0)
 
 
 @doctype.command("scaffold")
 @click.argument("name")
-@click.option("--app", default=None, help="Папка app куди розмістити DocType (за замовчуванням: шукати в apps/)")
+@click.option(
+    "--app",
+    default=None,
+    help="Папка app куди розмістити DocType (за замовчуванням: шукати в apps/)",
+)
 @click.option("--force", is_flag=True, help="Перезаписати існуючі файли")
 @click.option("--py-only", "py_only", is_flag=True, help="Перегенерувати тільки Python контролер")
 def doctype_scaffold(name: str, app: str | None, force: bool, py_only: bool) -> None:
@@ -794,19 +740,19 @@ def doctype_scaffold(name: str, app: str | None, force: bool, py_only: bool) -> 
         "module": module_name,
         "doctype": "DocType",
         "is_system": False,
-        "fields": [
-            {"fieldname": "name", "label": "Назва", "fieldtype": "Data", "required": True}
-        ],
+        "fields": [{"fieldname": "name", "label": "Назва", "fieldtype": "Data", "required": True}],
     }
     json_file = doctype_dir / f"{name}.json"
-    json_file.write_text(json.dumps(json_content, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    json_file.write_text(
+        json.dumps(json_content, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
     # 2. Python контролер
     py_file = doctype_dir / f"{name}.py"
     py_file.write_text(_make_controller(name, json_content["fields"]), encoding="utf-8")
 
     # 3. JavaScript client script
-    js_content = f'''/**
+    js_content = f"""/**
  * {name} Client Script
  *
  * Called in the UI when editing {name} documents.
@@ -836,7 +782,7 @@ function before_save(frm) {{
 function after_save(frm) {{
     // Called after saving
 }}
-'''
+"""
     js_file = doctype_dir / f"{name}.js"
     js_file.write_text(js_content, encoding="utf-8")
 
@@ -862,4 +808,3 @@ function after_save(frm) {{
     console.print(f"1. Відредагуй [cyan]{name}.json[/cyan] додай нові поля")
     console.print("2. Запусти: [cyan]grunt serve --reload[/cyan]")
     console.print(f"3. Перейди на http://localhost:5173/desk/list/{name}")
-

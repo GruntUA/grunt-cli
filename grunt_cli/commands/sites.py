@@ -20,6 +20,7 @@ def sites() -> None:
 # grunt sites list
 # ---------------------------------------------------------------------------
 
+
 def sites_list() -> None:
     """Показує список сайтів."""
     bench = get_bench_dir()
@@ -35,6 +36,7 @@ def sites_list() -> None:
 # ---------------------------------------------------------------------------
 # grunt sites new <name>
 # ---------------------------------------------------------------------------
+
 
 @sites.command("new")
 @click.argument("name")
@@ -75,11 +77,7 @@ def sites_new(name: str, db_url: str | None, no_migrate: bool) -> None:
     # .env
     secret_key = secrets.token_hex(32)
     database_url = db_url or "sqlite+aiosqlite:///./grunt.db"
-    env_content = (
-        "DEBUG=true\n"
-        f"DATABASE_URL={database_url}\n"
-        f"SECRET_KEY={secret_key}\n"
-    )
+    env_content = f"DEBUG=true\nDATABASE_URL={database_url}\nSECRET_KEY={secret_key}\n"
     (site_dir / ".env").write_text(env_content)
     console.print(f"[green]✓[/green] Сайт '{name}' створено")
 
@@ -87,11 +85,7 @@ def sites_new(name: str, db_url: str | None, no_migrate: bool) -> None:
     if not no_migrate:
         grunt_dir = bench_dir / "apps" / "grunt"
         console.print("[dim]Застосовую міграції...[/dim]")
-        run_mise(
-            grunt_dir, 
-            "db:migrate", 
-            env={"DOTENV_PATH": str(site_dir / ".env")}
-        )
+        run_mise(grunt_dir, "db:migrate", env={"DOTENV_PATH": str(site_dir / ".env")})
 
     # Встановлюємо як активний
     (sites_dir / "currentsite.txt").write_text(name)
@@ -108,6 +102,7 @@ def sites_new(name: str, db_url: str | None, no_migrate: bool) -> None:
 # ---------------------------------------------------------------------------
 # grunt sites use <name>
 # ---------------------------------------------------------------------------
+
 
 @sites.command("use")
 @click.argument("site_name")
@@ -130,6 +125,7 @@ def sites_use(site_name: str) -> None:
 # ---------------------------------------------------------------------------
 # grunt sites drop <name>
 # ---------------------------------------------------------------------------
+
 
 @sites.command("drop")
 @click.argument("name")
@@ -165,6 +161,7 @@ def sites_drop(name: str, force: bool) -> None:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _list_bench_sites(bench) -> None:
     sites_dir = bench / "sites"

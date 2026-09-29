@@ -29,7 +29,17 @@ def users_list(site: str | None) -> None:
 @click.option("--site", default=None, help="Назва сайту")
 def users_create(email: str, password: str, full_name: str, site: str | None) -> None:
     """Створити нового користувача напряму в БД."""
-    rc = venv_delegate("users", "create", "--email", email, "--password", password, "--full-name", full_name, site=site)
+    rc = venv_delegate(
+        "users",
+        "create",
+        "--email",
+        email,
+        "--password",
+        password,
+        "--full-name",
+        full_name,
+        site=site,
+    )
     if rc == -1:
         console.print("[red]✗[/red] Backend CLI не знайдено. Запустіть у папці проекту.")
     raise SystemExit(0 if rc in (0, -1) else rc)

@@ -85,6 +85,7 @@ def _git_pull(path: Path, label: str) -> bool:
             stats = diff_result.stdout.strip()
             if stats:
                 import re  # noqa: PLC0415
+
                 for line in stats.splitlines():
                     line = line.strip()
                     if "changed" in line and ("insertion" in line or "deletion" in line):
@@ -112,6 +113,7 @@ def _install_deps(path: Path, label: str) -> None:
     mise_toml = path / "mise.toml"
     if mise_toml.exists():
         import tomllib  # noqa: PLC0415
+
         with mise_toml.open("rb") as f:
             tasks = tomllib.load(f).get("tasks", {})
         if "deps" in tasks:
@@ -122,37 +124,29 @@ def _install_deps(path: Path, label: str) -> None:
 def _update_runtimes() -> None:
     """Оновити системні рантайми (Python, Node.js тощо) через mise."""
     import shutil  # noqa: PLC0415
-    
+
     # Спочатку шукаємо mise у поточному середовищі
     mise_bin = shutil.which("mise")
     if not mise_bin:
         console.print("  [yellow]⚠[/yellow]  mise не знайдено, пропускаю оновлення рантаймів")
         return
-    
+
     bench = get_bench_dir()
     if bench:
         config_file = bench / "apps" / "grunt" / "mise.toml"
         if config_file.exists():
             console.print("  [dim]Оновлюю системні рантайми (Python, Node.js тощо)...[/dim]")
-            result = subprocess.run(
-                [mise_bin, "install"],
-                cwd=str(bench),
-                check=False
-            )
+            result = subprocess.run([mise_bin, "install"], cwd=str(bench), check=False)
             if result.returncode == 0:
                 console.print("  [green]✓[/green] Системні рантайми оновлені")
             else:
                 console.print("  [yellow]⚠[/yellow]  Оновлення рантаймів завершилось з помилкою")
             return
-    
+
     site = get_site_dir()
     if site and (site / "mise.toml").exists():
         console.print("  [dim]Оновлюю системні рантайми (Python, Node.js тощо)...[/dim]")
-        result = subprocess.run(
-            [mise_bin, "install"],
-            cwd=str(site),
-            check=False
-        )
+        result = subprocess.run([mise_bin, "install"], cwd=str(site), check=False)
         if result.returncode == 0:
             console.print("  [green]✓[/green] Системні рантайми оновлені")
         else:
@@ -166,7 +160,7 @@ def _update_python_packages() -> None:
     import shutil  # noqa: PLC0415
     import sys  # noqa: PLC0415
     import os  # noqa: PLC0415
-    
+
     # Перевіряємо наявність uv
     uv_bin = find_uv()
     if uv_bin:
@@ -180,28 +174,32 @@ def _update_python_packages() -> None:
         # (editable) and their dependencies, installed by `grunt app deps`.
         result = subprocess.run(
             [uv_bin, "sync", "--upgrade", "--all-extras", "--inexact"],
-            cwd=cwd_dir, check=False, env=env,
+            cwd=cwd_dir,
+            check=False,
+            env=env,
         )
         if result.returncode != 0:
             console.print("  [yellow]⚠[/yellow]  uv sync --upgrade завершився з помилкою")
             return
         apps = subprocess.run(
-            [uv_bin, "run", "grunt", "app", "deps"], cwd=cwd_dir, check=False, env=env,
+            [uv_bin, "run", "grunt", "app", "deps"],
+            cwd=cwd_dir,
+            check=False,
+            env=env,
         )
         if apps.returncode != 0:
-            console.print("  [yellow]⚠[/yellow]  Залежності додатків не встановились (grunt app deps)")
+            console.print(
+                "  [yellow]⚠[/yellow]  Залежності додатків не встановились (grunt app deps)"
+            )
         else:
             console.print("  [green]✓[/green] Python пакети оновлені (фреймворк + додатки)")
         return
-    
+
     # Fallback на pip
     pip_bin = shutil.which("pip") or shutil.which("pip3")
     if pip_bin:
         console.print("  [dim]uv не знайдено, оновлюю через pip...[/dim]")
-        result = subprocess.run(
-            [pip_bin, "install", "--upgrade", "pip"],
-            check=False
-        )
+        result = subprocess.run([pip_bin, "install", "--upgrade", "pip"], check=False)
         if result.returncode != 0:
             console.print("  [yellow]⚠[/yellow]  pip update завершився з помилкою")
         else:
@@ -213,7 +211,7 @@ def _update_python_packages() -> None:
 def _run_npm_install(app_dir: Path) -> None:
     """Встановити npm пакети."""
     import shutil  # noqa: PLC0415
-    
+
     mise = shutil.which("mise")
     if mise:
         npm_run = [mise, "exec", "--", "npm"]
@@ -223,19 +221,20 @@ def _run_npm_install(app_dir: Path) -> None:
             console.print("  [yellow]⚠[/yellow]  npm не знайдено")
             return
         npm_run = [npm]
-    
+
     console.print(f"  [dim]Встановлюю npm пакети ({app_dir.name})...[/dim]")
     result = subprocess.run([*npm_run, "install"], cwd=str(app_dir), check=False)
-    
+
     if result.returncode != 0:
         # Retry after cleaning node_modules
         nm = app_dir / "node_modules"
         if nm.exists():
             console.print("  [dim]Очищення node_modules, повторна спроба...[/dim]")
             import shutil as _shutil  # noqa: PLC0415
+
             _shutil.rmtree(nm)
             result = subprocess.run([*npm_run, "install"], cwd=str(app_dir), check=False)
-    
+
     if result.returncode == 0:
         subprocess.run([*npm_run, "audit", "fix"], cwd=str(app_dir), check=False)
         console.print("  [green]✓[/green] npm пакети встановлені")
@@ -249,22 +248,23 @@ def _run_migrations(site: str | None) -> None:
     if site_dir is None:
         console.print("  [yellow]⚠[/yellow]  grunt.site не знайдено")
         return
-    
+
     console.print(f"  [dim]Запускаю міграції БД{f' для {site}' if site else ''}...[/dim]")
-    
+
     # Визначаємо директорію для міграцій
     from grunt_cli.helpers import get_apps_dir  # noqa: PLC0415
+
     try:
         apps_dir = get_apps_dir()
     except SystemExit:
         console.print("  [yellow]⚠[/yellow]  Grunt backend не знайдено (bench не визначено)")
         return
-    
-    backend_dir = apps_dir / "grunt" / "backend"
+
+    backend_dir = apps_dir / "grunt"
     if not backend_dir.exists():
         console.print(f"  [yellow]⚠[/yellow]  Grunt backend не знайдено: {backend_dir}")
         return
-    
+
     # Запускаємо міграції через mise
     if run_mise(apps_dir / "grunt", "db:migrate", env={"SITE_NAME": site or site_dir.name}):
         console.print("  [green]✓[/green] Міграції завершені")
@@ -318,24 +318,35 @@ def _get_cli_dir() -> Path | None:
 
 @click.command()
 @click.option("--cli", "update_cli", is_flag=True, default=False, help="Оновити тільки CLI")
-@click.option("--framework", "update_framework", is_flag=True, default=False,
-              help="Оновити тільки фреймворк")
-@click.option("--apps", "update_apps", is_flag=True, default=False,
-              help="Оновити тільки додатки")
-@click.option("--deps", "update_deps", is_flag=True, default=False,
-              help="Оновити системні залежності (Python, Node.js тощо)")
-@click.option("--skip-packages", is_flag=True, default=False,
-              help="Не оновлювати Python пакети")
-@click.option("--skip-npm", is_flag=True, default=False,
-              help="Не встановлювати npm пакети")
-@click.option("--skip-migrate", is_flag=True, default=False,
-              help="Не запускати міграції БД")
-@click.option("--no-deps", is_flag=True, default=False,
-              help="Не встановлювати залежності після оновлення")
+@click.option(
+    "--framework", "update_framework", is_flag=True, default=False, help="Оновити тільки фреймворк"
+)
+@click.option("--apps", "update_apps", is_flag=True, default=False, help="Оновити тільки додатки")
+@click.option(
+    "--deps",
+    "update_deps",
+    is_flag=True,
+    default=False,
+    help="Оновити системні залежності (Python, Node.js тощо)",
+)
+@click.option("--skip-packages", is_flag=True, default=False, help="Не оновлювати Python пакети")
+@click.option("--skip-npm", is_flag=True, default=False, help="Не встановлювати npm пакети")
+@click.option("--skip-migrate", is_flag=True, default=False, help="Не запускати міграції БД")
+@click.option(
+    "--no-deps", is_flag=True, default=False, help="Не встановлювати залежності після оновлення"
+)
 @click.option("--site", default=None, help="Назва сайту (для migrate)")
-def update(update_cli: bool, update_framework: bool, update_apps: bool, 
-           update_deps: bool, skip_packages: bool, skip_npm: bool, skip_migrate: bool, 
-           no_deps: bool, site: str | None) -> None:
+def update(
+    update_cli: bool,
+    update_framework: bool,
+    update_apps: bool,
+    update_deps: bool,
+    skip_packages: bool,
+    skip_npm: bool,
+    skip_migrate: bool,
+    no_deps: bool,
+    site: str | None,
+) -> None:
     """Оновити CLI, фреймворк, додатки, пакети та схему БД.
 
     \b
@@ -403,7 +414,8 @@ def update(update_cli: bool, update_framework: bool, update_apps: bool,
             console.print("  [dim]Директорію додатків не знайдено[/dim]")
         else:
             app_dirs = sorted(
-                p for p in apps_dir.iterdir()
+                p
+                for p in apps_dir.iterdir()
                 if p.is_dir() and p.name != "grunt" and (p / ".git").exists()
             )
 

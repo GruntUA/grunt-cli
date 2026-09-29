@@ -30,6 +30,7 @@ from grunt_cli.commands.doctype import doctype  # noqa: E402
 from grunt_cli.commands.fixtures import fixtures  # noqa: E402
 from grunt_cli.commands.init import init  # noqa: E402
 from grunt_cli.commands.install import install  # noqa: E402
+from grunt_cli.commands.lint import lint  # noqa: E402
 from grunt_cli.commands.master import master  # noqa: E402
 from grunt_cli.commands.serve import serve  # noqa: E402
 from grunt_cli.commands.shell import shell  # noqa: E402
@@ -54,6 +55,7 @@ cli.add_command(test)
 cli.add_command(master)
 cli.add_command(shell)
 cli.add_command(fixtures)
+cli.add_command(lint)
 
 
 def _load_plugins() -> None:
