@@ -123,6 +123,22 @@ grunt serve [OPTIONS]
 
 ---
 
+### `grunt update`
+
+Update grunt-cli, the framework and apps (`git pull`), then packages, npm and the DB schema.
+
+```bash
+grunt update              # everything
+grunt update cli          # only grunt-cli itself (works outside a project too)
+grunt update framework    # framework + packages, npm, migrations
+grunt update apps         # apps + packages, npm, migrations
+```
+
+For a private GitHub repository `grunt update` (like `grunt app get`) asks for a
+fine-grained token and stores it for that repository only.
+
+---
+
 ### `grunt app`
 
 Manage Grunt applications.
