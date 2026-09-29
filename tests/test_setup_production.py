@@ -79,3 +79,22 @@ def test_keeps_real_secret_key(bench):
 
     assert _run("\n\n\nn\n").exit_code == 0
     assert "SECRET_KEY=abc123realkey" in env_file.read_text()
+
+
+def test_finds_nginx_in_sbin_outside_user_path(bench, monkeypatch):
+    """nginx у /usr/sbin, якого немає в PATH користувача, — не «не встановлено»."""
+    calls = []
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    with (
+        patch("grunt_cli.commands.setup.shutil.which", return_value="/usr/sbin/nginx") as which,
+        patch("grunt_cli.commands.setup.subprocess.run") as run,
+        patch("grunt_cli.commands.setup._wait_for_site", return_value=True),
+        patch("grunt_cli.commands.setup.run_mise", return_value=True),
+    ):
+        run.side_effect = lambda cmd, **kw: calls.append(cmd) or type("R", (), {"returncode": 0})()
+        result = CliRunner().invoke(cli, ["setup", "production"], input="\n\n\ny\n")
+
+    assert result.exit_code == 0, result.output
+    assert "/usr/sbin" in which.call_args.kwargs["path"]
+    assert ["sudo", "nginx", "-t"] in calls
+    assert not any("apt-get" in c for c in calls)

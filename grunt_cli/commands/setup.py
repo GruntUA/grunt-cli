@@ -165,9 +165,13 @@ def production(site: str | None, port: int) -> None:
     if not click.confirm("  Встановити зараз?", default=True):
         console.print(f"  [dim]Пропущено. Файли — у {config_dir}[/dim]")
         return
-    if shutil.which("nginx") is None:
-        console.print("[red]✗[/red] nginx не встановлено: [cyan]sudo apt install nginx[/cyan]")
-        raise SystemExit(1)
+    # nginx лежить у /usr/sbin — його немає в PATH звичайного користувача.
+    if shutil.which("nginx", path="/usr/sbin:/usr/local/sbin:/sbin") is None:
+        if not click.confirm("  nginx не встановлено. Встановити (apt)?", default=True):
+            raise SystemExit(1)
+        if subprocess.run(["sudo", "apt-get", "install", "-y", "nginx"]).returncode != 0:
+            console.print("[red]✗[/red] Не вдалося встановити nginx")
+            raise SystemExit(1)
 
     nginx_conf = f"/etc/nginx/sites-available/{name}.conf"
     steps = [
