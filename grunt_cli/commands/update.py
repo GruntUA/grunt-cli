@@ -9,6 +9,7 @@ from pathlib import Path
 
 import click
 
+from grunt_cli.commands.restart import installed_units, restart_units
 from grunt_cli.helpers import (
     ask_github_token,
     console,
@@ -18,6 +19,7 @@ from grunt_cli.helpers import (
     get_site_dir,
     github_repo_path,
     run_mise,
+    venv_delegate,
 )
 
 
@@ -262,34 +264,51 @@ def _run_npm_install(app_dir: Path) -> None:
         console.print("  [yellow]⚠[/yellow]  npm install завершився з помилкою")
 
 
-def _run_migrations(site: str | None) -> None:
-    """Запустити міграції БД."""
-    site_dir = get_current_site()
-    if site_dir is None:
+def _run_migrations(site: str | None) -> bool:
+    """Повна ``grunt migrate`` фреймворку: Alembic + DocType-таблиці + fixtures.
+
+    Окремим процесом із venv проєкту — там уже новий код після git pull.
+    """
+    if get_current_site() is None:
         console.print("  [yellow]⚠[/yellow]  grunt.site не знайдено")
-        return
-
-    console.print(f"  [dim]Запускаю міграції БД{f' для {site}' if site else ''}...[/dim]")
-
-    # Визначаємо директорію для міграцій
-    from grunt_cli.helpers import get_apps_dir  # noqa: PLC0415
-
-    try:
-        apps_dir = get_apps_dir()
-    except SystemExit:
-        console.print("  [yellow]⚠[/yellow]  Grunt backend не знайдено (bench не визначено)")
-        return
-
-    backend_dir = apps_dir / "grunt"
-    if not backend_dir.exists():
-        console.print(f"  [yellow]⚠[/yellow]  Grunt backend не знайдено: {backend_dir}")
-        return
-
-    # Запускаємо міграції через mise
-    if run_mise(apps_dir / "grunt", "db:migrate", env={"SITE_NAME": site or site_dir.name}):
-        console.print("  [green]✓[/green] Міграції завершені")
-    else:
+        return False
+    code = venv_delegate("migrate", site=site)
+    if code == -1:
+        console.print("  [yellow]⚠[/yellow]  Backend venv не знайдено (apps/grunt/.venv)")
+        return False
+    if code != 0:
         console.print("  [yellow]⚠[/yellow]  Міграції завершилися з помилкою")
+        return False
+    console.print("  [green]✓[/green] Міграції завершені")
+    return True
+
+
+def _restart_production(migrated: bool) -> bool:
+    """На проді (є systemd-сервіси проєкту): зібрати фронтенд і перезапустити.
+
+    У розробці нічого не робить — ``grunt serve`` працює з ``--reload``.
+    Повертає False, якщо перезапуск не вдався.
+    """
+    bench = get_bench_dir()
+    units = installed_units(bench) if bench else []
+    if not units:
+        console.print(
+            "  [dim]Розробка (сервіси не встановлено): grunt serve підхопить зміни сам;"
+            " після оновлення пакетів перезапустіть його[/dim]"
+        )
+        return True
+    if not migrated:
+        console.print(
+            "  [yellow]⚠[/yellow]  Міграція не вдалася — сервіси НЕ перезапущено. "
+            "Виправте й виконайте [cyan]grunt migrate && grunt restart[/cyan]"
+        )
+        return False
+
+    console.print("  [dim]Збираю фронтенд (mise run build)...[/dim]")
+    if not run_mise(bench / "apps" / "grunt", "build"):
+        console.print("  [yellow]⚠[/yellow]  Збірка фронтенду не вдалася — сервіси НЕ перезапущено")
+        return False
+    return restart_units(units)
 
 
 def _find_bench_dir() -> Path | None:
@@ -359,6 +378,12 @@ _COMPONENTS = ("cli", "framework", "apps", "deps")
 @click.option(
     "--no-deps", is_flag=True, default=False, help="Не встановлювати залежності після оновлення"
 )
+@click.option(
+    "--no-restart",
+    is_flag=True,
+    default=False,
+    help="Не збирати фронтенд і не перезапускати сервіси (прод)",
+)
 @click.option("--site", default=None, help="Назва сайту (для migrate)")
 def update(
     component: str | None,
@@ -370,6 +395,7 @@ def update(
     skip_npm: bool,
     skip_migrate: bool,
     no_deps: bool,
+    no_restart: bool,
     site: str | None,
 ) -> None:
     """Оновити CLI, фреймворк, додатки, пакети та схему БД.
@@ -380,7 +406,8 @@ def update(
       2. mise install (системні залежності: Python, Node.js тощо)
       3. uv sync --upgrade --inexact + grunt app deps (Python пакети фреймворку й додатків)
       4. npm install
-      5. grunt migrate (міграція БД)
+      5. grunt migrate (Alembic + DocType-таблиці + fixtures)
+      6. прод (є systemd-сервіси): mise run build + перезапуск сервісів
 
     \b
     Без прапорців оновлює все.
@@ -394,6 +421,7 @@ def update(
       grunt update --deps           оновити тільки системні залежності
       grunt update --apps           тільки додатки + пакети + міграції
       grunt update --skip-migrate   без міграцій БД
+      grunt update --no-restart     без збірки фронтенду й перезапуску (прод)
       grunt update --no-deps        без перевстановлення залежностей
     """
     # `grunt update cli` == `grunt update --cli` тощо
@@ -504,17 +532,28 @@ def update(
         console.print()
 
     # ── 7. Міграція БД ──────────────────────────────────────────────
+    migrated = True
     if not skip_migrate:
         console.print("[bold cyan]Міграція БД[/bold cyan]")
-        _run_migrations(site)
+        migrated = _run_migrations(site)
         updated_something = True
         console.print()
     else:
         console.print("[dim]Міграція БД пропущена (--skip-migrate)[/dim]")
         console.print()
 
+    # ── 8. Перезапуск ───────────────────────────────────────────────
+    restarted = True
+    if updated_something and not no_restart:
+        console.print("[bold cyan]Перезапуск[/bold cyan]")
+        restarted = _restart_production(migrated)
+        console.print()
+
     # ── Фінал ───────────────────────────────────────────────────────
-    if updated_something:
+    if not updated_something:
+        console.print("[yellow]Нічого не оновлено[/yellow]")
+    elif restarted:
         console.print("[bold green]✅ Оновлення завершено[/bold green]")
     else:
-        console.print("[yellow]Нічого не оновлено[/yellow]")
+        console.print("[bold red]✗ Оновлення завершено з помилками[/bold red]")
+        raise SystemExit(1)

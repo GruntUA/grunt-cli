@@ -624,6 +624,89 @@ class TestUpdate:
         mock_migrate.assert_not_called()
 
 
+class TestUpdateRestart:
+    """Після міграції: на проді — збірка фронтенду й перезапуск сервісів."""
+
+    @staticmethod
+    def _bench(tmp_path, monkeypatch, units: tuple[str, ...]):
+        bench = tmp_path / "mlt_prod"
+        (bench / "apps" / "grunt").mkdir(parents=True)
+        (bench / "sites").mkdir()
+        systemd = tmp_path / "systemd"
+        systemd.mkdir()
+        for unit in units:
+            (systemd / unit).write_text("")
+        monkeypatch.setattr("grunt_cli.commands.restart.SYSTEMD_DIR", systemd)
+        monkeypatch.chdir(bench)
+        return bench
+
+    @staticmethod
+    def _run(runner, *args):
+        with (
+            patch("grunt_cli.commands.update._update_python_packages"),
+            patch("grunt_cli.commands.update._run_npm_install"),
+            patch("grunt_cli.commands.update._update_runtimes"),
+            patch("grunt_cli.commands.update._get_cli_dir", return_value=None),
+            patch("grunt_cli.commands.update._git_pull", return_value=True),
+        ):
+            return runner.invoke(cli, ["update", "--framework", "--no-deps", *args])
+
+    @patch("grunt_cli.commands.update.restart_units", return_value=True)
+    @patch("grunt_cli.commands.update.run_mise", return_value=True)
+    @patch("grunt_cli.commands.update._run_migrations", return_value=True)
+    def test_production_builds_and_restarts(
+        self, _migrate, mock_mise, mock_restart, runner, tmp_path, monkeypatch
+    ):
+        bench = self._bench(
+            tmp_path, monkeypatch, ("mlt_prod-web.service", "mlt_prod-worker.service")
+        )
+        result = self._run(runner)
+        assert result.exit_code == 0, result.output
+        mock_mise.assert_any_call(bench / "apps" / "grunt", "build")
+        mock_restart.assert_called_once_with(["mlt_prod-web.service", "mlt_prod-worker.service"])
+
+    @patch("grunt_cli.commands.update.restart_units")
+    @patch("grunt_cli.commands.update.run_mise", return_value=True)
+    @patch("grunt_cli.commands.update._run_migrations", return_value=False)
+    def test_failed_migration_skips_restart(
+        self, _migrate, _mise, mock_restart, runner, tmp_path, monkeypatch
+    ):
+        self._bench(tmp_path, monkeypatch, ("mlt_prod-web.service",))
+        result = self._run(runner)
+        assert result.exit_code != 0
+        assert "НЕ перезапущено" in result.output
+        mock_restart.assert_not_called()
+
+    @patch("grunt_cli.commands.update.restart_units")
+    @patch("grunt_cli.commands.update._run_migrations", return_value=True)
+    def test_development_does_not_restart(
+        self, _migrate, mock_restart, runner, tmp_path, monkeypatch
+    ):
+        self._bench(tmp_path, monkeypatch, ())
+        result = self._run(runner)
+        assert result.exit_code == 0, result.output
+        assert "grunt serve" in result.output
+        mock_restart.assert_not_called()
+
+    @patch("grunt_cli.commands.update.restart_units")
+    @patch("grunt_cli.commands.update._run_migrations", return_value=True)
+    def test_no_restart_flag(self, _migrate, mock_restart, runner, tmp_path, monkeypatch):
+        self._bench(tmp_path, monkeypatch, ("mlt_prod-web.service",))
+        result = self._run(runner, "--no-restart")
+        assert result.exit_code == 0, result.output
+        mock_restart.assert_not_called()
+
+    @patch("grunt_cli.commands.update.venv_delegate", return_value=0)
+    def test_migrations_run_full_framework_migrate(self, mock_delegate, tmp_path, monkeypatch):
+        from grunt_cli.commands.update import _run_migrations
+
+        site = tmp_path / "site"
+        site.mkdir()
+        monkeypatch.setattr("grunt_cli.commands.update.get_current_site", lambda: site)
+        assert _run_migrations(None) is True
+        mock_delegate.assert_called_once_with("migrate", site=None)
+
+
 # ── grunt master ───────────────────────────────────────────────
 
 

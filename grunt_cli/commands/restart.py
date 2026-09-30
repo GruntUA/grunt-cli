@@ -40,11 +40,22 @@ def restart(only_web: bool, only_worker: bool) -> None:
             "  Спершу [cyan]grunt setup production[/cyan] (або в розробці — grunt serve)."
         )
         raise SystemExit(1)
+    if not restart_units(units):
+        raise SystemExit(1)
 
+
+def installed_units(bench: Path) -> list[str]:
+    """Встановлені systemd-сервіси проєкту (порожньо — це розробка, не прод)."""
+    units = [f"{bench.name}-{kind}.service" for kind in ("web", "worker")]
+    return [u for u in units if (SYSTEMD_DIR / u).exists()]
+
+
+def restart_units(units: list[str]) -> bool:
+    """``sudo systemctl restart`` + перевірка, що сервіси піднялися."""
     console.print(f"[dim]sudo systemctl restart {' '.join(units)}[/dim]")
     if subprocess.run(["sudo", "systemctl", "restart", *units]).returncode != 0:
         console.print("[red]✗[/red] Не вдалося перезапустити")
-        raise SystemExit(1)
+        return False
 
     # Дати сервісам кілька секунд: помилка імпорту чи конфігу валить їх не одразу.
     time.sleep(5)
@@ -56,7 +67,8 @@ def restart(only_web: bool, only_worker: bool) -> None:
             console.print(f"[green]✓[/green] {unit}")
     if failed:
         console.print(f"  Журнал: [cyan]journalctl -u {failed[0]} -n 50 --no-pager[/cyan]")
-        raise SystemExit(1)
+        return False
+    return True
 
 
 def _is_active(unit: str) -> bool:
