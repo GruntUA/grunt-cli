@@ -11,6 +11,7 @@ import click
 
 from grunt_cli.commands.restart import installed_units, restart_units
 from grunt_cli.helpers import (
+    FRAMEWORK_CLI_MODULE,
     ask_github_token,
     console,
     find_uv,
@@ -24,7 +25,7 @@ from grunt_cli.helpers import (
 
 
 def _git_pull(path: Path, label: str) -> bool:
-    """Виконує git pull у вказаній директорії. Повертає True якщо успішно."""
+    """Виконує git fetch + rebase у вказаній директорії. Повертає True якщо успішно."""
     if not (path / ".git").exists():
         console.print(f"  [yellow]⚠[/yellow]  {label}: не є git-репозиторієм, пропускаю")
         return False
@@ -55,9 +56,12 @@ def _git_pull(path: Path, label: str) -> bool:
     ).stdout.strip()
     github_path = github_repo_path(remote)
 
+    # fetch + rebase на @{upstream} замість git pull: pull бере ціль з
+    # .git/FETCH_HEAD, а паралельний fetch (напр. autofetch у VS Code) дописує
+    # туди дублікат — і pull падає з "Cannot rebase onto multiple branches".
     for attempt in range(2):
         result = subprocess.run(
-            ["git", "pull", "--rebase", "--autostash"],
+            ["git", "fetch"],
             cwd=str(path),
             env=env,
             capture_output=True,
@@ -72,15 +76,31 @@ def _git_pull(path: Path, label: str) -> bool:
         if not ask_github_token(github_path):
             break
 
+    if result.returncode == 0:
+        result = subprocess.run(
+            ["git", "rebase", "--autostash", "@{upstream}"],
+            cwd=str(path),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0 and any(
+            (path / ".git" / d).exists() for d in ("rebase-merge", "rebase-apply")
+        ):
+            # Конфлікт — повертаємо репозиторій у стан до оновлення.
+            subprocess.run(
+                ["git", "rebase", "--abort"], cwd=str(path), capture_output=True, text=True
+            )
+
     if result.returncode != 0:
-        stderr = result.stderr.strip()
+        stderr = (result.stderr or result.stdout).strip()
         if auth_error:
             console.print(f"  [yellow]⚠[/yellow]  {label}: немає доступу до {remote}")
             console.print(
                 "    [dim]Запустіть grunt update у терміналі — він запитає токен GitHub[/dim]"
             )
         else:
-            console.print(f"  [red]✗[/red] {label}: помилка git pull")
+            console.print(f"  [red]✗[/red] {label}: помилка оновлення з git")
             if stderr:
                 console.print(f"    [dim]{stderr}[/dim]")
         return False
@@ -128,6 +148,35 @@ def _git_pull(path: Path, label: str) -> bool:
     return True
 
 
+# npm без package-lock.json: не читає і не переписує його (він під git).
+_NPM_NO_LOCK_ENV = {"npm_config_package_lock": "false"}
+_NPM_DEP_KEYS = ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
+
+
+def _package_lock_stale(path: Path) -> bool:
+    """package-lock.json не відповідає package.json.
+
+    Буває, коли в апстрімі підняли версії в package.json, а lock не
+    перегенерували: npm install тоді падає з ERESOLVE на точних peer-версіях.
+    """
+    import json  # noqa: PLC0415
+
+    try:
+        pkg = json.loads((path / "package.json").read_text())
+        lock = json.loads((path / "package-lock.json").read_text())
+    except (OSError, ValueError):
+        return False
+    root = lock.get("packages", {}).get("", {})
+    return any(pkg.get(k, {}) != root.get(k, {}) for k in _NPM_DEP_KEYS)
+
+
+def _warn_stale_lock(label: str) -> None:
+    console.print(
+        f"  [yellow]⚠[/yellow]  {label}: package-lock.json не синхронізований з package.json"
+        " — npm встановлює пакети без нього"
+    )
+
+
 def _install_deps(path: Path, label: str) -> bool:
     """Встановлює залежності через mise; True, якщо відпрацювала задача ``deps``."""
     console.print(f"  [dim]Оновлюю рантайми для {label}...[/dim]")
@@ -141,7 +190,12 @@ def _install_deps(path: Path, label: str) -> bool:
             tasks = tomllib.load(f).get("tasks", {})
         if "deps" in tasks:
             console.print(f"  [dim]Встановлюю пакети для {label} (mise run deps)...[/dim]")
-            return bool(run_mise(path, "run", "deps"))
+            # deps-задача сама викликає npm install — із застарілим lock вона б упала.
+            env = None
+            if _package_lock_stale(path):
+                _warn_stale_lock(label)
+                env = _NPM_NO_LOCK_ENV
+            return bool(run_mise(path, "run", "deps", env=env))
     return False
 
 
@@ -205,7 +259,7 @@ def _update_python_packages() -> None:
             console.print("  [yellow]⚠[/yellow]  uv sync --upgrade завершився з помилкою")
             return
         apps = subprocess.run(
-            [uv_bin, "run", "grunt", "app", "deps"],
+            [uv_bin, "run", "python", "-m", FRAMEWORK_CLI_MODULE, "app", "deps"],
             cwd=cwd_dir,
             check=False,
             env=env,
@@ -246,24 +300,42 @@ def _run_npm_install(app_dir: Path) -> None:
         npm_run = [npm]
 
     console.print(f"  [dim]Встановлюю npm пакети ({app_dir.name})...[/dim]")
-    result = subprocess.run([*npm_run, "install"], cwd=str(app_dir), check=False)
+    no_lock = [*npm_run, "install", "--no-package-lock"]
 
-    if result.returncode != 0:
-        # Retry after cleaning node_modules
-        nm = app_dir / "node_modules"
-        if nm.exists():
-            console.print("  [dim]Очищення node_modules, повторна спроба...[/dim]")
-            import shutil as _shutil  # noqa: PLC0415
-
-            _shutil.rmtree(nm)
-            result = subprocess.run([*npm_run, "install"], cwd=str(app_dir), check=False)
-
-    # Без `npm audit fix`: він переписує закомічений package-lock.json фреймворку,
-    # і наступний git pull конфліктує. Версії пакетів приходять лише з lock-файла.
-    if result.returncode == 0:
-        console.print("  [green]✓[/green] npm пакети встановлені")
+    if _package_lock_stale(app_dir):
+        # Із застарілим lock звичайний install гарантовано впаде з ERESOLVE —
+        # одразу розв'язуємо за package.json.
+        _warn_stale_lock(app_dir.name)
     else:
-        console.print("  [yellow]⚠[/yellow]  npm install завершився з помилкою")
+        result = subprocess.run([*npm_run, "install"], cwd=str(app_dir), check=False)
+        # Без `npm audit fix`: він переписує закомічений package-lock.json фреймворку,
+        # і наступний git pull конфліктує. Версії пакетів приходять лише з lock-файла.
+        if result.returncode == 0:
+            console.print("  [green]✓[/green] npm пакети встановлені")
+            return
+        console.print("  [dim]Повторна спроба без package-lock.json...[/dim]")
+
+    if subprocess.run(no_lock, cwd=str(app_dir), check=False).returncode == 0:
+        console.print("  [green]✓[/green] npm пакети встановлені (без package-lock.json)")
+        return
+
+    # Чиста установка, але старий node_modules відкладаємо, а не видаляємо:
+    # якщо й вона впаде, повертаємо його, щоб було з чим зібрати фронтенд.
+    nm = app_dir / "node_modules"
+    backup = app_dir / "node_modules.bak"
+    if nm.exists():
+        console.print("  [dim]Чиста установка node_modules, повторна спроба...[/dim]")
+        shutil.rmtree(backup, ignore_errors=True)
+        nm.rename(backup)
+        if subprocess.run(no_lock, cwd=str(app_dir), check=False).returncode == 0:
+            shutil.rmtree(backup, ignore_errors=True)
+            console.print("  [green]✓[/green] npm пакети встановлені (чиста установка)")
+            return
+        shutil.rmtree(nm, ignore_errors=True)
+        backup.rename(nm)
+        console.print("  [dim]Повернуто попередній node_modules[/dim]")
+
+    console.print("  [yellow]⚠[/yellow]  npm install завершився з помилкою")
 
 
 def _run_migrations(site: str | None) -> bool:
@@ -404,7 +476,7 @@ def update(
 
     \b
     Послідовність:
-      1. git pull --rebase для CLI, фреймворку та додатків
+      1. git fetch + rebase для CLI, фреймворку та додатків
       2. mise install (системні залежності: Python, Node.js тощо)
       3. uv sync --upgrade --inexact + grunt app deps (Python пакети фреймворку й додатків)
       4. npm install

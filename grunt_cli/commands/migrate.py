@@ -76,7 +76,7 @@ def migrate(site_name: str | None, dry_run: bool) -> None:
         console.print("[red]✗[/red] Backend venv не знайдено (apps/grunt/.venv).")
         raise SystemExit(1)
 
-    cmd = [grunt_bin, "migrate"]
+    cmd = [*grunt_bin, "migrate"]
     if site_name:
         cmd.extend(["--site", site_name])
     if dry_run:

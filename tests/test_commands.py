@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -204,7 +205,7 @@ class TestMigrate:
         venv_bin.mkdir(parents=True)
         (app_dir / "alembic.ini").write_text("[alembic]\n")
         (venv_bin / "alembic").touch()
-        (venv_bin / "grunt").touch()
+        (venv_bin / "python").touch()
 
         site_a = bench / "sites" / "a.local"
         site_a.mkdir(parents=True)
@@ -235,8 +236,8 @@ class TestMigrate:
         ]
 
         delegated_cmd = mock_run.call_args_list[1][0][0]
-        assert delegated_cmd[0].endswith("/apps/grunt/.venv/bin/grunt")
-        assert delegated_cmd[1:] == ["migrate"]
+        assert delegated_cmd[0].endswith("/apps/grunt/.venv/bin/python")
+        assert delegated_cmd[1:] == ["-m", "grunt.cli.main", "migrate"]
 
     @patch("grunt_cli.commands.migrate.subprocess.run")
     def test_migrate_with_site_passes_through(self, mock_run, runner, tmp_path, monkeypatch):
@@ -248,7 +249,14 @@ class TestMigrate:
 
         assert result.exit_code == 0
         delegated_cmd = mock_run.call_args_list[1][0][0]
-        assert delegated_cmd[1:] == ["migrate", "--site", "a.local", "--dry-run"]
+        assert delegated_cmd[1:] == [
+            "-m",
+            "grunt.cli.main",
+            "migrate",
+            "--site",
+            "a.local",
+            "--dry-run",
+        ]
 
     @patch("grunt_cli.commands.migrate.subprocess.run")
     def test_migrate_alembic_failure_stops_before_delegating(
@@ -824,14 +832,25 @@ class TestMaster:
 
 class TestFrameworkDelegation:
     @patch("grunt_cli.helpers.get_dotenv_path", return_value="/bench/sites/s/.env")
-    @patch("grunt_cli.helpers.get_venv_grunt", return_value="/bench/apps/grunt/.venv/bin/grunt")
+    @patch(
+        "grunt_cli.helpers.get_venv_grunt",
+        return_value=["/bench/apps/grunt/.venv/bin/python", "-m", "grunt.cli.main"],
+    )
     @patch("subprocess.run")
     def test_unknown_command_goes_to_framework_cli(self, mock_run, _venv, _dotenv, runner):
         mock_run.return_value = MagicMock(returncode=0)
         result = runner.invoke(cli, ["data", "import", "/tmp/b.tar", "--yes"])
         assert result.exit_code == 0, result.output
         cmd = mock_run.call_args.args[0]
-        assert cmd == ["/bench/apps/grunt/.venv/bin/grunt", "data", "import", "/tmp/b.tar", "--yes"]
+        assert cmd == [
+            "/bench/apps/grunt/.venv/bin/python",
+            "-m",
+            "grunt.cli.main",
+            "data",
+            "import",
+            "/tmp/b.tar",
+            "--yes",
+        ]
         assert mock_run.call_args.kwargs["env"]["DOTENV_PATH"] == "/bench/sites/s/.env"
 
     @patch("grunt_cli.helpers.get_venv_grunt", return_value=None)
@@ -899,3 +918,100 @@ class TestRestart:
 
         assert result.exit_code != 0
         assert "grunt setup production" in result.output
+
+
+class TestGitPull:
+    """_git_pull: fetch + rebase на @{upstream}, без залежності від FETCH_HEAD."""
+
+    def _repo(self, tmp_path):
+        upstream = tmp_path / "up"
+        subprocess.run(["git", "init", "-q", "-b", "master", str(upstream)], check=True)
+        git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+        subprocess.run(
+            [*git, "-C", str(upstream), "commit", "-q", "--allow-empty", "-m", "a"], check=True
+        )
+        wc = tmp_path / "wc"
+        subprocess.run(["git", "clone", "-q", str(upstream), str(wc)], check=True)
+        subprocess.run(
+            [*git, "-C", str(upstream), "commit", "-q", "--allow-empty", "-m", "b"], check=True
+        )
+        return upstream, wc
+
+    def test_survives_duplicated_fetch_head(self, tmp_path):
+        from grunt_cli.commands.update import _git_pull
+
+        upstream, wc = self._repo(tmp_path)
+        # Паралельний fetch (autofetch IDE) лишає дубльований рядок у FETCH_HEAD.
+        subprocess.run(["git", "-C", str(wc), "fetch", "-q"], check=True)
+        fetch_head = wc / ".git" / "FETCH_HEAD"
+        fetch_head.write_text(fetch_head.read_text() * 2)
+
+        assert _git_pull(wc, "wc") is True
+        head = subprocess.run(
+            ["git", "-C", str(wc), "rev-parse", "HEAD"], capture_output=True, text=True
+        ).stdout
+        up_head = subprocess.run(
+            ["git", "-C", str(upstream), "rev-parse", "HEAD"], capture_output=True, text=True
+        ).stdout
+        assert head == up_head
+
+
+class TestNpmInstall:
+    """_run_npm_install: застарілий package-lock не повинен лишати прод без node_modules."""
+
+    @patch("shutil.which", return_value="/usr/bin/npm")
+    @patch("grunt_cli.commands.update.subprocess.run")
+    def test_falls_back_to_no_package_lock(self, mock_run, mock_which, tmp_path):
+        from grunt_cli.commands.update import _run_npm_install
+
+        (tmp_path / "node_modules" / "vue-tsc").mkdir(parents=True)
+        mock_run.side_effect = [MagicMock(returncode=1), MagicMock(returncode=0)]
+
+        _run_npm_install(tmp_path)
+
+        assert mock_run.call_args_list[1].args[0][-1] == "--no-package-lock"
+        assert (tmp_path / "node_modules" / "vue-tsc").exists()
+
+    @patch("shutil.which", return_value="/usr/bin/npm")
+    @patch("grunt_cli.commands.update.subprocess.run", return_value=MagicMock(returncode=1))
+    def test_restores_node_modules_when_all_attempts_fail(self, mock_run, mock_which, tmp_path):
+        from grunt_cli.commands.update import _run_npm_install
+
+        (tmp_path / "node_modules" / "vue-tsc").mkdir(parents=True)
+
+        _run_npm_install(tmp_path)
+
+        assert mock_run.call_count == 3
+        assert (tmp_path / "node_modules" / "vue-tsc").exists()
+        assert not (tmp_path / "node_modules.bak").exists()
+
+    @patch("shutil.which", return_value="/usr/bin/npm")
+    @patch("grunt_cli.commands.update.subprocess.run", return_value=MagicMock(returncode=0))
+    def test_stale_lock_skips_plain_install(self, mock_run, mock_which, tmp_path):
+        from grunt_cli.commands.update import _run_npm_install
+
+        (tmp_path / "package.json").write_text(json.dumps({"dependencies": {"a": "^2.0.0"}}))
+        (tmp_path / "package-lock.json").write_text(
+            json.dumps({"packages": {"": {"dependencies": {"a": "^1.0.0"}}}})
+        )
+
+        _run_npm_install(tmp_path)
+
+        assert mock_run.call_count == 1
+        assert mock_run.call_args.args[0][-1] == "--no-package-lock"
+
+    def test_package_lock_stale_detection(self, tmp_path):
+        from grunt_cli.commands.update import _package_lock_stale
+
+        pkg = {"dependencies": {"a": "^2.0.0"}, "devDependencies": {"b": "1"}}
+        (tmp_path / "package.json").write_text(json.dumps(pkg))
+        (tmp_path / "package-lock.json").write_text(json.dumps({"packages": {"": pkg}}))
+        assert _package_lock_stale(tmp_path) is False
+
+        (tmp_path / "package-lock.json").write_text(
+            json.dumps({"packages": {"": {**pkg, "dependencies": {"a": "^1.0.0"}}}})
+        )
+        assert _package_lock_stale(tmp_path) is True
+
+        (tmp_path / "package-lock.json").unlink()
+        assert _package_lock_stale(tmp_path) is False

@@ -6,7 +6,7 @@ import sys
 import os
 from pathlib import Path
 import click
-from grunt_cli.helpers import console, get_bench_dir, find_uv
+from grunt_cli.helpers import console, find_uv, get_bench_dir, get_venv_grunt
 
 
 @click.command(context_settings={"ignore_unknown_options": True, "allow_extra_args": True})
@@ -23,12 +23,12 @@ def test(args: tuple[str, ...]) -> None:
     # 0. Bench mode: delegate entirely to the project venv's grunt test
     bench = get_bench_dir()
     if bench:
-        venv_grunt = bench / ".venv" / "bin" / "grunt"
-        if venv_grunt.exists():
+        venv_grunt = get_venv_grunt()
+        if venv_grunt:
             console.print(f"[dim]Bench виявлено у {bench}. Делегую до venv grunt test...[/dim]")
             grunt_app_root = bench / "apps" / "grunt"
             result = subprocess.run(
-                [str(venv_grunt), "test", *args],
+                [*venv_grunt, "test", *args],
                 cwd=str(grunt_app_root) if grunt_app_root.is_dir() else str(bench),
             )
             raise SystemExit(result.returncode)

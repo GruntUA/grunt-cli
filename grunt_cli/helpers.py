@@ -129,13 +129,22 @@ def optional_auth_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"} if token else {}
 
 
-def get_venv_grunt() -> str | None:
-    """Повертає шлях до backend grunt CLI у .venv, або None якщо не знайдено."""
-    bench_dir = get_bench_dir()
-    if bench_dir is None:
-        return None
-    venv_grunt = bench_dir / "apps" / "grunt" / ".venv" / "bin" / "grunt"
-    return str(venv_grunt) if venv_grunt.exists() else None
+FRAMEWORK_CLI_MODULE = "grunt.cli.main"
+
+
+def framework_cli_cmd(venv_python: Path | str) -> list[str]:
+    """Команда запуску CLI фреймворку через Python його venv.
+
+    Фреймворк не ставить власний скрипт ``grunt`` (щоб не конфліктувати з grunt-cli),
+    тому викликаємо його як модуль: ``python -m grunt.cli.main``.
+    """
+    return [str(venv_python), "-m", FRAMEWORK_CLI_MODULE]
+
+
+def get_venv_grunt() -> list[str] | None:
+    """Повертає команду запуску backend grunt CLI з .venv, або None якщо не знайдено."""
+    venv_python = get_venv_python()
+    return framework_cli_cmd(venv_python) if venv_python else None
 
 
 def get_dotenv_path() -> str | None:
@@ -170,7 +179,7 @@ def venv_delegate(*args: str, site: str | None = None) -> int:
     if dotenv:
         env["DOTENV_PATH"] = dotenv
 
-    cmd = [grunt_bin, *args]
+    cmd = [*grunt_bin, *args]
     site_name = site or get_current_site_name()
     if site_name:
         cmd.extend(["--site", site_name])

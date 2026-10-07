@@ -38,7 +38,7 @@ class _DelegatingGroup(click.Group):
             env = {**os.environ}
             if dotenv := get_dotenv_path():
                 env["DOTENV_PATH"] = dotenv
-            result = subprocess.run([framework_cli, cmd_name, *args], env=env)
+            result = subprocess.run([*framework_cli, cmd_name, *args], env=env)
             raise SystemExit(result.returncode)
 
         return _framework_command

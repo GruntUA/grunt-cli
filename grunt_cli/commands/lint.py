@@ -36,7 +36,7 @@ def lint(fix: bool, only_py: bool, only_js: bool, path: str | None, apps: tuple[
         )
         raise SystemExit(1)
 
-    cmd = [grunt_bin, "lint"]
+    cmd = [*grunt_bin, "lint"]
     if fix:
         cmd.append("--fix")
     if only_py:

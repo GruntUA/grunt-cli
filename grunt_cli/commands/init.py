@@ -13,6 +13,7 @@ from grunt_cli.helpers import (
     GRUNT_REPO_URL,
     clone_grunt,
     console,
+    framework_cli_cmd,
     get_bench_dir,
     get_current_site,
     get_site_dir,
@@ -91,15 +92,15 @@ def _create_user_direct(
     """Створює користувача напрямо в БД через backend grunt CLI (без запущеного сервера)."""
     import os  # noqa: PLC0415
 
-    venv_grunt = grunt_dir / ".venv" / "bin" / "grunt"
-    if not venv_grunt.exists():
+    venv_python = grunt_dir / ".venv" / "bin" / "python"
+    if not venv_python.exists():
         console.print("[red]✗[/red] Backend CLI не знайдено. Запусти [cyan]mise run deps[/cyan]")
         return
 
     env_path = site_dir / ".env"
     result = subprocess.run(
         [
-            str(venv_grunt),
+            *framework_cli_cmd(venv_python),
             "users",
             "create",
             "--email",
