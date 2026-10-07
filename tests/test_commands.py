@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -899,3 +900,39 @@ class TestRestart:
 
         assert result.exit_code != 0
         assert "grunt setup production" in result.output
+
+
+class TestGitPull:
+    """_git_pull: fetch + rebase на @{upstream}, без залежності від FETCH_HEAD."""
+
+    def _repo(self, tmp_path):
+        upstream = tmp_path / "up"
+        subprocess.run(["git", "init", "-q", "-b", "master", str(upstream)], check=True)
+        git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+        subprocess.run(
+            [*git, "-C", str(upstream), "commit", "-q", "--allow-empty", "-m", "a"], check=True
+        )
+        wc = tmp_path / "wc"
+        subprocess.run(["git", "clone", "-q", str(upstream), str(wc)], check=True)
+        subprocess.run(
+            [*git, "-C", str(upstream), "commit", "-q", "--allow-empty", "-m", "b"], check=True
+        )
+        return upstream, wc
+
+    def test_survives_duplicated_fetch_head(self, tmp_path):
+        from grunt_cli.commands.update import _git_pull
+
+        upstream, wc = self._repo(tmp_path)
+        # Паралельний fetch (autofetch IDE) лишає дубльований рядок у FETCH_HEAD.
+        subprocess.run(["git", "-C", str(wc), "fetch", "-q"], check=True)
+        fetch_head = wc / ".git" / "FETCH_HEAD"
+        fetch_head.write_text(fetch_head.read_text() * 2)
+
+        assert _git_pull(wc, "wc") is True
+        head = subprocess.run(
+            ["git", "-C", str(wc), "rev-parse", "HEAD"], capture_output=True, text=True
+        ).stdout
+        up_head = subprocess.run(
+            ["git", "-C", str(upstream), "rev-parse", "HEAD"], capture_output=True, text=True
+        ).stdout
+        assert head == up_head

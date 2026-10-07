@@ -24,7 +24,7 @@ from grunt_cli.helpers import (
 
 
 def _git_pull(path: Path, label: str) -> bool:
-    """Виконує git pull у вказаній директорії. Повертає True якщо успішно."""
+    """Виконує git fetch + rebase у вказаній директорії. Повертає True якщо успішно."""
     if not (path / ".git").exists():
         console.print(f"  [yellow]⚠[/yellow]  {label}: не є git-репозиторієм, пропускаю")
         return False
@@ -55,9 +55,12 @@ def _git_pull(path: Path, label: str) -> bool:
     ).stdout.strip()
     github_path = github_repo_path(remote)
 
+    # fetch + rebase на @{upstream} замість git pull: pull бере ціль з
+    # .git/FETCH_HEAD, а паралельний fetch (напр. autofetch у VS Code) дописує
+    # туди дублікат — і pull падає з "Cannot rebase onto multiple branches".
     for attempt in range(2):
         result = subprocess.run(
-            ["git", "pull", "--rebase", "--autostash"],
+            ["git", "fetch"],
             cwd=str(path),
             env=env,
             capture_output=True,
@@ -72,15 +75,31 @@ def _git_pull(path: Path, label: str) -> bool:
         if not ask_github_token(github_path):
             break
 
+    if result.returncode == 0:
+        result = subprocess.run(
+            ["git", "rebase", "--autostash", "@{upstream}"],
+            cwd=str(path),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0 and any(
+            (path / ".git" / d).exists() for d in ("rebase-merge", "rebase-apply")
+        ):
+            # Конфлікт — повертаємо репозиторій у стан до оновлення.
+            subprocess.run(
+                ["git", "rebase", "--abort"], cwd=str(path), capture_output=True, text=True
+            )
+
     if result.returncode != 0:
-        stderr = result.stderr.strip()
+        stderr = (result.stderr or result.stdout).strip()
         if auth_error:
             console.print(f"  [yellow]⚠[/yellow]  {label}: немає доступу до {remote}")
             console.print(
                 "    [dim]Запустіть grunt update у терміналі — він запитає токен GitHub[/dim]"
             )
         else:
-            console.print(f"  [red]✗[/red] {label}: помилка git pull")
+            console.print(f"  [red]✗[/red] {label}: помилка оновлення з git")
             if stderr:
                 console.print(f"    [dim]{stderr}[/dim]")
         return False
@@ -402,7 +421,7 @@ def update(
 
     \b
     Послідовність:
-      1. git pull --rebase для CLI, фреймворку та додатків
+      1. git fetch + rebase для CLI, фреймворку та додатків
       2. mise install (системні залежності: Python, Node.js тощо)
       3. uv sync --upgrade --inexact + grunt app deps (Python пакети фреймворку й додатків)
       4. npm install
