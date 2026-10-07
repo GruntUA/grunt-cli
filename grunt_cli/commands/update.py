@@ -147,6 +147,35 @@ def _git_pull(path: Path, label: str) -> bool:
     return True
 
 
+# npm без package-lock.json: не читає і не переписує його (він під git).
+_NPM_NO_LOCK_ENV = {"npm_config_package_lock": "false"}
+_NPM_DEP_KEYS = ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
+
+
+def _package_lock_stale(path: Path) -> bool:
+    """package-lock.json не відповідає package.json.
+
+    Буває, коли в апстрімі підняли версії в package.json, а lock не
+    перегенерували: npm install тоді падає з ERESOLVE на точних peer-версіях.
+    """
+    import json  # noqa: PLC0415
+
+    try:
+        pkg = json.loads((path / "package.json").read_text())
+        lock = json.loads((path / "package-lock.json").read_text())
+    except (OSError, ValueError):
+        return False
+    root = lock.get("packages", {}).get("", {})
+    return any(pkg.get(k, {}) != root.get(k, {}) for k in _NPM_DEP_KEYS)
+
+
+def _warn_stale_lock(label: str) -> None:
+    console.print(
+        f"  [yellow]⚠[/yellow]  {label}: package-lock.json не синхронізований з package.json"
+        " — npm встановлює пакети без нього"
+    )
+
+
 def _install_deps(path: Path, label: str) -> None:
     """Встановлює залежності через mise."""
     console.print(f"  [dim]Оновлюю рантайми для {label}...[/dim]")
@@ -160,7 +189,12 @@ def _install_deps(path: Path, label: str) -> None:
             tasks = tomllib.load(f).get("tasks", {})
         if "deps" in tasks:
             console.print(f"  [dim]Встановлюю пакети для {label} (mise run deps)...[/dim]")
-            run_mise(path, "run", "deps")
+            # deps-задача сама викликає npm install — із застарілим lock вона б упала.
+            env = None
+            if _package_lock_stale(path):
+                _warn_stale_lock(label)
+                env = _NPM_NO_LOCK_ENV
+            run_mise(path, "run", "deps", env=env)
 
 
 def _update_runtimes() -> None:
@@ -264,18 +298,21 @@ def _run_npm_install(app_dir: Path) -> None:
         npm_run = [npm]
 
     console.print(f"  [dim]Встановлюю npm пакети ({app_dir.name})...[/dim]")
-    result = subprocess.run([*npm_run, "install"], cwd=str(app_dir), check=False)
-    if result.returncode == 0:
-        subprocess.run([*npm_run, "audit", "fix"], cwd=str(app_dir), check=False)
-        console.print("  [green]✓[/green] npm пакети встановлені")
-        return
-
-    # Найчастіша причина — package-lock.json в апстрімі не оновили разом із
-    # package.json (ERESOLVE на точних peer-версіях). Розв'язуємо заново без
-    # lock-файлу: --no-package-lock його не читає і не переписує (він у git).
-    # audit fix після цього не запускаємо — він знову поставив би версії з lock.
     no_lock = [*npm_run, "install", "--no-package-lock"]
-    console.print("  [dim]Повторна спроба без package-lock.json...[/dim]")
+
+    if _package_lock_stale(app_dir):
+        # Із застарілим lock звичайний install гарантовано впаде з ERESOLVE —
+        # одразу розв'язуємо за package.json. audit fix не запускаємо: він
+        # знову поставив би версії з lock.
+        _warn_stale_lock(app_dir.name)
+    else:
+        result = subprocess.run([*npm_run, "install"], cwd=str(app_dir), check=False)
+        if result.returncode == 0:
+            subprocess.run([*npm_run, "audit", "fix"], cwd=str(app_dir), check=False)
+            console.print("  [green]✓[/green] npm пакети встановлені")
+            return
+        console.print("  [dim]Повторна спроба без package-lock.json...[/dim]")
+
     if subprocess.run(no_lock, cwd=str(app_dir), check=False).returncode == 0:
         console.print("  [green]✓[/green] npm пакети встановлені (без package-lock.json)")
         return

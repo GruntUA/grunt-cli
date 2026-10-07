@@ -966,3 +966,34 @@ class TestNpmInstall:
         assert mock_run.call_count == 3
         assert (tmp_path / "node_modules" / "vue-tsc").exists()
         assert not (tmp_path / "node_modules.bak").exists()
+
+    @patch("shutil.which", return_value="/usr/bin/npm")
+    @patch("grunt_cli.commands.update.subprocess.run", return_value=MagicMock(returncode=0))
+    def test_stale_lock_skips_plain_install(self, mock_run, mock_which, tmp_path):
+        from grunt_cli.commands.update import _run_npm_install
+
+        (tmp_path / "package.json").write_text(json.dumps({"dependencies": {"a": "^2.0.0"}}))
+        (tmp_path / "package-lock.json").write_text(
+            json.dumps({"packages": {"": {"dependencies": {"a": "^1.0.0"}}}})
+        )
+
+        _run_npm_install(tmp_path)
+
+        assert mock_run.call_count == 1
+        assert mock_run.call_args.args[0][-1] == "--no-package-lock"
+
+    def test_package_lock_stale_detection(self, tmp_path):
+        from grunt_cli.commands.update import _package_lock_stale
+
+        pkg = {"dependencies": {"a": "^2.0.0"}, "devDependencies": {"b": "1"}}
+        (tmp_path / "package.json").write_text(json.dumps(pkg))
+        (tmp_path / "package-lock.json").write_text(json.dumps({"packages": {"": pkg}}))
+        assert _package_lock_stale(tmp_path) is False
+
+        (tmp_path / "package-lock.json").write_text(
+            json.dumps({"packages": {"": {**pkg, "dependencies": {"a": "^1.0.0"}}}})
+        )
+        assert _package_lock_stale(tmp_path) is True
+
+        (tmp_path / "package-lock.json").unlink()
+        assert _package_lock_stale(tmp_path) is False
