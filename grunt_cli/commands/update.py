@@ -265,22 +265,38 @@ def _run_npm_install(app_dir: Path) -> None:
 
     console.print(f"  [dim]Встановлюю npm пакети ({app_dir.name})...[/dim]")
     result = subprocess.run([*npm_run, "install"], cwd=str(app_dir), check=False)
-
-    if result.returncode != 0:
-        # Retry after cleaning node_modules
-        nm = app_dir / "node_modules"
-        if nm.exists():
-            console.print("  [dim]Очищення node_modules, повторна спроба...[/dim]")
-            import shutil as _shutil  # noqa: PLC0415
-
-            _shutil.rmtree(nm)
-            result = subprocess.run([*npm_run, "install"], cwd=str(app_dir), check=False)
-
     if result.returncode == 0:
         subprocess.run([*npm_run, "audit", "fix"], cwd=str(app_dir), check=False)
         console.print("  [green]✓[/green] npm пакети встановлені")
-    else:
-        console.print("  [yellow]⚠[/yellow]  npm install завершився з помилкою")
+        return
+
+    # Найчастіша причина — package-lock.json в апстрімі не оновили разом із
+    # package.json (ERESOLVE на точних peer-версіях). Розв'язуємо заново без
+    # lock-файлу: --no-package-lock його не читає і не переписує (він у git).
+    # audit fix після цього не запускаємо — він знову поставив би версії з lock.
+    no_lock = [*npm_run, "install", "--no-package-lock"]
+    console.print("  [dim]Повторна спроба без package-lock.json...[/dim]")
+    if subprocess.run(no_lock, cwd=str(app_dir), check=False).returncode == 0:
+        console.print("  [green]✓[/green] npm пакети встановлені (без package-lock.json)")
+        return
+
+    # Чиста установка, але старий node_modules відкладаємо, а не видаляємо:
+    # якщо й вона впаде, повертаємо його, щоб було з чим зібрати фронтенд.
+    nm = app_dir / "node_modules"
+    backup = app_dir / "node_modules.bak"
+    if nm.exists():
+        console.print("  [dim]Чиста установка node_modules, повторна спроба...[/dim]")
+        shutil.rmtree(backup, ignore_errors=True)
+        nm.rename(backup)
+        if subprocess.run(no_lock, cwd=str(app_dir), check=False).returncode == 0:
+            shutil.rmtree(backup, ignore_errors=True)
+            console.print("  [green]✓[/green] npm пакети встановлені (чиста установка)")
+            return
+        shutil.rmtree(nm, ignore_errors=True)
+        backup.rename(nm)
+        console.print("  [dim]Повернуто попередній node_modules[/dim]")
+
+    console.print("  [yellow]⚠[/yellow]  npm install завершився з помилкою")
 
 
 def _run_migrations(site: str | None) -> bool:

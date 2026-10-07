@@ -936,3 +936,33 @@ class TestGitPull:
             ["git", "-C", str(upstream), "rev-parse", "HEAD"], capture_output=True, text=True
         ).stdout
         assert head == up_head
+
+
+class TestNpmInstall:
+    """_run_npm_install: застарілий package-lock не повинен лишати прод без node_modules."""
+
+    @patch("shutil.which", return_value="/usr/bin/npm")
+    @patch("grunt_cli.commands.update.subprocess.run")
+    def test_falls_back_to_no_package_lock(self, mock_run, mock_which, tmp_path):
+        from grunt_cli.commands.update import _run_npm_install
+
+        (tmp_path / "node_modules" / "vue-tsc").mkdir(parents=True)
+        mock_run.side_effect = [MagicMock(returncode=1), MagicMock(returncode=0)]
+
+        _run_npm_install(tmp_path)
+
+        assert mock_run.call_args_list[1].args[0][-1] == "--no-package-lock"
+        assert (tmp_path / "node_modules" / "vue-tsc").exists()
+
+    @patch("shutil.which", return_value="/usr/bin/npm")
+    @patch("grunt_cli.commands.update.subprocess.run", return_value=MagicMock(returncode=1))
+    def test_restores_node_modules_when_all_attempts_fail(self, mock_run, mock_which, tmp_path):
+        from grunt_cli.commands.update import _run_npm_install
+
+        (tmp_path / "node_modules" / "vue-tsc").mkdir(parents=True)
+
+        _run_npm_install(tmp_path)
+
+        assert mock_run.call_count == 3
+        assert (tmp_path / "node_modules" / "vue-tsc").exists()
+        assert not (tmp_path / "node_modules.bak").exists()
