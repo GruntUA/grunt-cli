@@ -178,6 +178,12 @@ def _serve_bench(
         if env_file.exists():
             backend_env["DOTENV_PATH"] = str(env_file)
 
+    # mise prefixes every output line with the task label ([backend], [worker],
+    # [frontend]) and drops its "$ <script>" echo; the children then write to a
+    # pipe, so ask them to keep colours.
+    output_env = {"MISE_TASK_OUTPUT": "prefix", "MISE_QUIET": "true", "FORCE_COLOR": "1"}
+    backend_env.update(output_env)
+
     procs: list[subprocess.Popen] = []
 
     def shutdown(sig=None, frame=None):
@@ -246,7 +252,7 @@ def _serve_bench(
         )
 
         console.print(
-            f"[green]▶[/green] Backend:  http://{host}:{port}  [dim](bench, {len(sites)} сайтів)[/dim]"
+            f"[green]▶[/green] Backend:  http://{host}:{port}  [dim](bench, {_sites_label(len(sites))})[/dim]"
         )
         console.print(f"  [dim]API docs: http://localhost:{port}/docs[/dim]")
         for s in sites:
@@ -273,9 +279,19 @@ def _serve_bench(
             )
 
     if not backend_only:
-        _start_frontend(procs, grunt_dir, bench_dir)
+        _start_frontend(procs, grunt_dir, {**os.environ, **output_env})
 
     _wait_for_procs(procs, shutdown)
+
+
+def _sites_label(n: int) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        word = "сайт"
+    elif n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        word = "сайти"
+    else:
+        word = "сайтів"
+    return f"{n} {word}"
 
 
 def _redis_configured(env: dict[str, str]) -> bool:
@@ -292,7 +308,7 @@ def _redis_configured(env: dict[str, str]) -> bool:
     return False
 
 
-def _start_frontend(procs: list, grunt_dir: Path, node_base_dir: Path) -> None:
+def _start_frontend(procs: list, grunt_dir: Path, env: dict[str, str]) -> None:
     """Запускає Vite frontend."""
     if not (grunt_dir / "package.json").exists():
         console.print("[yellow]⚠[/yellow]  package.json не знайдено, frontend пропущено")
@@ -300,7 +316,7 @@ def _start_frontend(procs: list, grunt_dir: Path, node_base_dir: Path) -> None:
 
     console.print("[green]▶[/green] Frontend: http://localhost:5173")
     procs.append(
-        run_mise_popen(grunt_dir, "frontend", env=os.environ, config_file=grunt_dir / "mise.toml")
+        run_mise_popen(grunt_dir, "frontend", env=env, config_file=grunt_dir / "mise.toml")
     )
 
 

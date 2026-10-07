@@ -128,8 +128,8 @@ def _git_pull(path: Path, label: str) -> bool:
     return True
 
 
-def _install_deps(path: Path, label: str) -> None:
-    """Встановлює залежності через mise."""
+def _install_deps(path: Path, label: str) -> bool:
+    """Встановлює залежності через mise; True, якщо відпрацювала задача ``deps``."""
     console.print(f"  [dim]Оновлюю рантайми для {label}...[/dim]")
     run_mise(path, "install")
 
@@ -141,7 +141,8 @@ def _install_deps(path: Path, label: str) -> None:
             tasks = tomllib.load(f).get("tasks", {})
         if "deps" in tasks:
             console.print(f"  [dim]Встановлюю пакети для {label} (mise run deps)...[/dim]")
-            run_mise(path, "run", "deps")
+            return bool(run_mise(path, "run", "deps"))
+    return False
 
 
 def _update_runtimes() -> None:
@@ -257,8 +258,9 @@ def _run_npm_install(app_dir: Path) -> None:
             _shutil.rmtree(nm)
             result = subprocess.run([*npm_run, "install"], cwd=str(app_dir), check=False)
 
+    # Без `npm audit fix`: він переписує закомічений package-lock.json фреймворку,
+    # і наступний git pull конфліктує. Версії пакетів приходять лише з lock-файла.
     if result.returncode == 0:
-        subprocess.run([*npm_run, "audit", "fix"], cwd=str(app_dir), check=False)
         console.print("  [green]✓[/green] npm пакети встановлені")
     else:
         console.print("  [yellow]⚠[/yellow]  npm install завершився з помилкою")
@@ -458,6 +460,8 @@ def update(
         console.print()
 
     # ── 2. Framework ────────────────────────────────────────────────
+    # Задача фреймворку `deps` уже робить `npm install` — крок 6 тоді не дублює його.
+    framework_deps_done = False
     if update_all or update_framework:
         console.print("[bold cyan]Фреймворк[/bold cyan]")
         apps_dir = _find_apps_dir()
@@ -468,7 +472,7 @@ def update(
         else:
             _git_pull(framework_dir, "grunt")
             if not no_deps:
-                _install_deps(framework_dir, "grunt")
+                framework_deps_done = _install_deps(framework_dir, "grunt")
             updated_something = True
         console.print()
 
@@ -521,7 +525,9 @@ def update(
     if not skip_npm:
         console.print("[bold cyan]npm пакети[/bold cyan]")
         apps_dir = _find_apps_dir()
-        if apps_dir and (apps_dir / "grunt").exists():
+        if framework_deps_done:
+            console.print("  [green]✓[/green] npm пакети вже встановлені (mise run deps)")
+        elif apps_dir and (apps_dir / "grunt").exists():
             _run_npm_install(apps_dir / "grunt")
             updated_something = True
         else:
