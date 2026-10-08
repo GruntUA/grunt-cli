@@ -75,30 +75,6 @@ def db(ctx: click.Context, site_name: str | None) -> None:
     ctx.obj["site"] = site_name
 
 
-@db.command("migrate")
-@click.option("--dry-run", is_flag=True, help="Показати план міграцій без застосування")
-@click.pass_context
-def db_migrate(ctx: click.Context, dry_run: bool) -> None:
-    """Застосовує всі міграції (alembic upgrade head)."""
-    backend_dir, site_dir, env = _resolve_db_context(ctx.obj["site"])
-    cmd = _get_alembic_cmd(backend_dir, env) + ["upgrade", "head"]
-
-    if dry_run:
-        cmd.extend(["--sql"])
-        console.print(f"[dim]Сайт: {site_dir.name} (сухе запущення)[/dim]\n")
-        result = subprocess.run(cmd, cwd=str(site_dir), env=env)
-        console.print(
-            "\n[yellow]![/yellow] Це лише показ. Для застосування запусти без [cyan]--dry-run[/cyan]"
-        )
-        sys.exit(result.returncode)
-
-    console.print(f"[dim]Сайт: {site_dir.name}[/dim]")
-    result = subprocess.run(cmd, cwd=str(site_dir), env=env)
-    if result.returncode == 0:
-        console.print("[green]✓[/green] Міграції застосовані")
-    sys.exit(result.returncode)
-
-
 @db.command("rollback")
 @click.argument("steps", default=1)
 @click.pass_context

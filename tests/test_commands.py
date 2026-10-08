@@ -156,23 +156,11 @@ class TestInit:
 
 
 class TestDb:
-    def test_db_migrate_no_site(self, runner):
-        with patch("grunt_cli.commands.db.get_site_dir", return_value=None):
-            result = runner.invoke(cli, ["db", "migrate"])
-            assert result.exit_code != 0
-
-    @patch("grunt_cli.commands.db.subprocess.run")
-    def test_db_migrate_success(self, mock_run, runner, tmp_path):
-        site_dir = tmp_path / "site"
-        site_dir.mkdir()
-        (site_dir / "grunt.site").write_text("{}")
-        backend = site_dir / "apps" / "grunt" / "backend"
-        backend.mkdir(parents=True)
-        mock_run.return_value = MagicMock(returncode=0)
-
-        with patch("grunt_cli.commands.db.get_site_dir", return_value=site_dir):
-            result = runner.invoke(cli, ["db", "migrate"])
-            assert result.exit_code == 0
+    def test_db_migrate_removed(self, runner):
+        """Only `grunt migrate` migrates - an alembic-only `db migrate` left the
+        DocType tables behind."""
+        result = runner.invoke(cli, ["db", "migrate"])
+        assert result.exit_code != 0
 
     @patch("grunt_cli.commands.db.subprocess.run")
     def test_db_rollback(self, mock_run, runner, tmp_path):

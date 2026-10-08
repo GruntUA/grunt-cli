@@ -241,12 +241,24 @@ grunt app export <NAME> [--api http://localhost:8000]
 
 ---
 
+### `grunt migrate`
+
+Bring the database in line with the code: Alembic migrations, then the DocType
+tables (new DocTypes, new columns) and fixtures. Run after every update or pull.
+
+```bash
+grunt migrate                       # all sites
+grunt migrate --site mysite.local   # one site
+grunt migrate --dry-run             # show the DocType SQL without running it
+```
+
+---
+
 ### `grunt db`
 
 Database management commands.
 
 ```bash
-grunt db migrate          # Apply all pending migrations
 grunt db rollback [N]     # Revert N migrations (default: 1)
 grunt db history          # Show migration history
 grunt db reset --yes      # Delete all data (DEBUG mode only)
