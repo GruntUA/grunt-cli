@@ -4,12 +4,29 @@ from __future__ import annotations
 
 import os
 import sys
-
 from importlib.metadata import entry_points
 
 import click
 
 from grunt_cli import __version__
+from grunt_cli.commands.app import app
+from grunt_cli.commands.auth import auth
+from grunt_cli.commands.db import db
+from grunt_cli.commands.doctype import doctype
+from grunt_cli.commands.fixtures import fixtures
+from grunt_cli.commands.init import init
+from grunt_cli.commands.install import install
+from grunt_cli.commands.lint import lint
+from grunt_cli.commands.master import master
+from grunt_cli.commands.migrate import migrate
+from grunt_cli.commands.restart import restart
+from grunt_cli.commands.serve import serve
+from grunt_cli.commands.setup import setup
+from grunt_cli.commands.shell import shell
+from grunt_cli.commands.sites import sites
+from grunt_cli.commands.test import test
+from grunt_cli.commands.update import update
+from grunt_cli.commands.users import users
 
 
 class _DelegatingGroup(click.Group):
@@ -54,25 +71,6 @@ def cli() -> None:
         click.echo("Помилка: Поточна директорія не існує. Спробуйте виконати 'cd .'", err=True)
         sys.exit(1)
 
-
-from grunt_cli.commands.app import app  # noqa: E402
-from grunt_cli.commands.auth import auth  # noqa: E402
-from grunt_cli.commands.db import db  # noqa: E402
-from grunt_cli.commands.doctype import doctype  # noqa: E402
-from grunt_cli.commands.fixtures import fixtures  # noqa: E402
-from grunt_cli.commands.init import init  # noqa: E402
-from grunt_cli.commands.install import install  # noqa: E402
-from grunt_cli.commands.lint import lint  # noqa: E402
-from grunt_cli.commands.master import master  # noqa: E402
-from grunt_cli.commands.restart import restart  # noqa: E402
-from grunt_cli.commands.serve import serve  # noqa: E402
-from grunt_cli.commands.setup import setup  # noqa: E402
-from grunt_cli.commands.shell import shell  # noqa: E402
-from grunt_cli.commands.sites import sites  # noqa: E402
-from grunt_cli.commands.test import test  # noqa: E402
-from grunt_cli.commands.migrate import migrate  # noqa: E402
-from grunt_cli.commands.update import update  # noqa: E402
-from grunt_cli.commands.users import users  # noqa: E402
 
 cli.add_command(install)
 cli.add_command(init)

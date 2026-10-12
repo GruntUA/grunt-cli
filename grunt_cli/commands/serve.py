@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import click
 
-from grunt_cli.helpers import console, get_bench_dir, get_site_dir, run_mise_popen
+from grunt_cli.helpers import console, get_bench_dir, run_mise_popen
 
 
 def _kill_port(port: int) -> None:
@@ -29,10 +29,8 @@ def _kill_port(port: int) -> None:
         if pids:
             console.print(f"  [dim]Звільняю порт {port} (PID: {', '.join(pids)})[/dim]")
             for pid in pids:
-                try:
+                with contextlib.suppress(ProcessLookupError, ValueError):
                     os.kill(int(pid), signal.SIGTERM)
-                except (ProcessLookupError, ValueError):
-                    pass
             time.sleep(0.5)
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
@@ -85,21 +83,18 @@ def _kill_stale_processes(grunt_dir: Path) -> None:
     if not pgids:
         return
     console.print(
-        f"  [dim]Зупиняю залишки попереднього запуску (PGID: {', '.join(map(str, sorted(pgids)))})[/dim]"
+        "  [dim]Зупиняю залишки попереднього запуску "
+        f"(PGID: {', '.join(map(str, sorted(pgids)))})[/dim]"
     )
     for pgid in pgids:
-        try:
+        with contextlib.suppress(OSError):
             killpg(pgid, signal.SIGTERM)
-        except OSError:
-            pass
     deadline = time.monotonic() + 8
     while time.monotonic() < deadline and any(_group_alive(g) for g in pgids):
         time.sleep(0.2)
     for pgid in pgids:
-        try:
+        with contextlib.suppress(OSError):
             killpg(pgid, signal.SIGKILL)
-        except OSError:
-            pass
 
 
 @click.command()
@@ -135,7 +130,6 @@ def _serve_bench(
 ) -> None:
     """Запуск серверів у bench-режимі (мультисайтовість)."""
     grunt_dir = bench_dir / "apps" / "grunt"
-    venv_dir = bench_dir / ".venv"
 
     if not grunt_dir.exists():
         console.print(f"[red]✗[/red] Grunt framework не знайдено: {grunt_dir}")
@@ -147,12 +141,6 @@ def _serve_bench(
         [d.name for d in sites_dir.iterdir() if d.is_dir() and (d / "grunt.site").exists()]
         if sites_dir.is_dir()
         else []
-    )
-
-    python_exe = (
-        str(venv_dir / "bin" / "python")
-        if (venv_dir / "bin" / "python").exists()
-        else sys.executable
     )
 
     # Визначаємо активний сайт для env
@@ -193,20 +181,16 @@ def _serve_bench(
         # mise — otherwise uv/taskiq outliving it get orphaned.
         pgids = [p.pid for p in procs]
         for pgid in pgids:
-            try:
+            with contextlib.suppress(ProcessLookupError, OSError):
                 killpg(pgid, signal.SIGTERM)
-            except (ProcessLookupError, OSError):
-                pass
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline and any(_group_alive(g) for g in pgids):
             for p in procs:
                 p.poll()  # reap mise so it does not keep the group "alive" as a zombie
             time.sleep(0.2)
         for pgid in pgids:
-            try:
+            with contextlib.suppress(ProcessLookupError, OSError):
                 killpg(pgid, signal.SIGKILL)
-            except (ProcessLookupError, OSError):
-                pass
         sys.exit(0)
 
     signal.signal(signal.SIGINT, shutdown)
@@ -252,7 +236,8 @@ def _serve_bench(
         )
 
         console.print(
-            f"[green]▶[/green] Backend:  http://{host}:{port}  [dim](bench, {_sites_label(len(sites))})[/dim]"
+            f"[green]▶[/green] Backend:  http://{host}:{port}  "
+            f"[dim](bench, {_sites_label(len(sites))})[/dim]"
         )
         console.print(f"  [dim]API docs: http://localhost:{port}/docs[/dim]")
         for s in sites:

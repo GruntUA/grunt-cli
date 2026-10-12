@@ -84,9 +84,11 @@ class TestTokenManagement:
 
     def test_auth_headers_no_token_exits(self, tmp_path):
         fake_token_file = tmp_path / ".grunt_token"
-        with patch("grunt_cli.helpers.token_file", return_value=fake_token_file):
-            with pytest.raises(SystemExit):
-                auth_headers()
+        with (
+            patch("grunt_cli.helpers.token_file", return_value=fake_token_file),
+            pytest.raises(SystemExit),
+        ):
+            auth_headers()
 
 
 # ── get_site_dir ────────────────────────────────────────────────
@@ -105,12 +107,18 @@ class TestGetSiteDir:
         with patch("grunt_cli.helpers.Path.cwd", return_value=child):
             assert get_site_dir() == tmp_path
 
-    def test_finds_bench_structure(self, tmp_path):
+    def test_bench_root_uses_current_site(self, tmp_path):
+        # get_site_dir шукає лише вгору; з кореня bench активний сайт — з currentsite.txt.
+        from grunt_cli.helpers import get_current_site
+
+        (tmp_path / "apps").mkdir()
         site = tmp_path / "sites" / "my-site"
         site.mkdir(parents=True)
         (site / "grunt.site").write_text("{}")
+        (tmp_path / "sites" / "currentsite.txt").write_text("my-site")
         with patch("grunt_cli.helpers.Path.cwd", return_value=tmp_path):
-            assert get_site_dir() == site
+            assert get_site_dir() is None
+            assert get_current_site() == site
 
     def test_returns_none_when_not_found(self, tmp_path):
         with patch("grunt_cli.helpers.Path.cwd", return_value=tmp_path):

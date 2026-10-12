@@ -1,11 +1,13 @@
 """grunt test — запуск тестів проекту або CLI."""
 
 from __future__ import annotations
+
 import subprocess
 import sys
-import os
 from pathlib import Path
+
 import click
+
 from grunt_cli.helpers import console, find_uv, get_bench_dir, get_venv_grunt
 
 
@@ -53,10 +55,7 @@ def test(args: tuple[str, ...]) -> None:
                 break
 
         cmd = []
-        if uv_bin:
-            cmd = [uv_bin, "run", "pytest"]
-        else:
-            cmd = ["pytest"]
+        cmd = [uv_bin, "run", "pytest"] if uv_bin else ["pytest"]
 
         if found_t and not args:
             cmd.append(found_t)

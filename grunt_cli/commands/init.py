@@ -16,7 +16,6 @@ from grunt_cli.helpers import (
     framework_cli_cmd,
     get_bench_dir,
     get_current_site,
-    get_site_dir,
     run_mise,
 )
 
@@ -67,7 +66,7 @@ def _init_bench(name: str, repo: str, branch: str) -> None:
     console.print("[green]✓[/green] Створено структуру logs/")
 
     # Клонуємо Grunt
-    grunt_dir = clone_grunt(apps_dir, repo, branch)
+    clone_grunt(apps_dir, repo, branch)
 
     # Встановлюємо все через mise
     run_mise(bench_dir, "install")
@@ -122,10 +121,10 @@ def _create_user_direct(
         if "вже існує" in output or "already exists" in output:
             console.print(f"[yellow]~[/yellow] Користувач {email} вже існує")
         else:
-            console.print(f"[red]✗[/red] Помилка створення користувача:")
+            console.print("[red]✗[/red] Помилка створення користувача:")
             if output:
                 console.print(f"[dim]{output}[/dim]")
-            console.print(f"   Запусти вручну: [cyan]grunt users create[/cyan]")
+            console.print("   Запусти вручну: [cyan]grunt users create[/cyan]")
 
 
 def _init_site() -> None:

@@ -48,63 +48,51 @@ class TestInstall:
             result = runner.invoke(cli, ["install", str(project)])
             assert result.exit_code != 0
 
-    @patch("grunt_cli.commands.install.install_npm_deps")
-    @patch("grunt_cli.commands.install.ensure_venv")
+    @patch("grunt_cli.commands.install.run_mise", return_value=True)
     @patch("grunt_cli.commands.install.clone_grunt")
-    def test_install_creates_structure(self, mock_clone, mock_venv, mock_npm, runner, tmp_path):
+    def test_install_creates_structure(self, mock_clone, mock_mise, runner, tmp_path):
         mock_clone.return_value = tmp_path / "test-site" / "apps" / "grunt"
         with runner.isolated_filesystem(temp_dir=tmp_path) as td:
             result = runner.invoke(cli, ["install", "test-site"])
-            site_dir = Path(td) / "test-site"
-            assert site_dir.exists()
-            assert (site_dir / "apps").is_dir()
+            assert result.exit_code == 0, result.output
+            bench = Path(td) / "test-site"
+            site_dir = bench / "sites" / "default"
+            assert (bench / "apps").is_dir()
             assert (site_dir / "grunt.site").exists()
             assert (site_dir / ".env").exists()
+            assert (bench / "sites" / "currentsite.txt").read_text() == "default"
 
             config = json.loads((site_dir / "grunt.site").read_text())
             assert "grunt" in config["installed_apps"]
+        mock_mise.assert_called_once()
 
-    @patch("grunt_cli.commands.install.install_npm_deps")
-    @patch("grunt_cli.commands.install.ensure_venv")
+    @patch("grunt_cli.commands.install.run_mise", return_value=True)
     @patch("grunt_cli.commands.install.clone_grunt")
-    def test_install_git_clone_failure(self, mock_clone, mock_venv, mock_npm, runner, tmp_path):
+    def test_install_git_clone_failure(self, mock_clone, mock_mise, runner, tmp_path):
         mock_clone.side_effect = SystemExit(1)
         with runner.isolated_filesystem(temp_dir=tmp_path):
             result = runner.invoke(cli, ["install", "test-site"])
             assert result.exit_code != 0
+        mock_mise.assert_not_called()
 
 
 # ── grunt serve ─────────────────────────────────────────────────
 
 
 class TestServe:
-    def test_serve_no_site_dir(self, runner):
-        with (
-            patch("grunt_cli.commands.serve.get_site_dir", return_value=None),
-            patch("grunt_cli.commands.serve.get_bench_dir", return_value=None),
-        ):
+    def test_serve_outside_bench(self, runner):
+        with patch("grunt_cli.commands.serve.get_bench_dir", return_value=None):
             result = runner.invoke(cli, ["serve"])
             assert result.exit_code != 0
 
     def test_serve_bench_no_grunt_framework(self, runner, tmp_path):
         bench = tmp_path / "bench"
-        bench.mkdir()
-        (bench / "apps").mkdir()
+        (bench / "apps").mkdir(parents=True)
         (bench / "sites").mkdir()
-        with (
-            patch("grunt_cli.commands.serve.get_site_dir", return_value=None),
-            patch("grunt_cli.commands.serve.get_bench_dir", return_value=bench),
-        ):
+        with patch("grunt_cli.commands.serve.get_bench_dir", return_value=bench):
             result = runner.invoke(cli, ["serve"])
             assert result.exit_code != 0
-
-    def test_serve_flat_no_grunt_framework(self, runner, tmp_path):
-        with (
-            patch("grunt_cli.commands.serve.get_site_dir", return_value=tmp_path),
-            patch("grunt_cli.commands.serve.get_bench_dir", return_value=None),
-        ):
-            result = runner.invoke(cli, ["serve"])
-            assert result.exit_code != 0
+            assert "Grunt framework не знайдено" in result.output
 
 
 # ── grunt init ──────────────────────────────────────────────────
@@ -115,41 +103,45 @@ class TestInit:
         """grunt init (без аргументу) — без bench і без site_dir — помилка."""
         with (
             patch("grunt_cli.commands.init.get_bench_dir", return_value=None),
-            patch("grunt_cli.commands.init.get_site_dir", return_value=None),
+            patch("grunt_cli.commands.init.get_current_site", return_value=None),
         ):
             result = runner.invoke(cli, ["init"])
             assert result.exit_code != 0
 
-    @patch("grunt_cli.commands.init.run_alembic", return_value=True)
-    def test_init_generates_secret_key(self, mock_alembic, runner, tmp_path):
-        """grunt init (без аргументу) — flat site, генерує SECRET_KEY."""
-        (tmp_path / "grunt.site").write_text("{}")
-        (tmp_path / ".env").write_text("DEBUG=true\nSECRET_KEY=change-me\n")
-        grunt_dir = tmp_path / "apps" / "grunt" / "backend"
-        grunt_dir.mkdir(parents=True)
+    @patch("grunt_cli.commands.init.run_mise", return_value=True)
+    def test_init_generates_secret_key(self, mock_mise, runner, tmp_path):
+        """grunt init (без аргументу) — генерує SECRET_KEY і запускає mise setup."""
+        site = tmp_path / "sites" / "dev.local"
+        site.mkdir(parents=True)
+        (site / "grunt.site").write_text("{}")
+        (site / ".env").write_text("DEBUG=true\nSECRET_KEY=change-me\n")
 
         with (
-            patch("grunt_cli.commands.init.get_bench_dir", return_value=None),
-            patch("grunt_cli.commands.init.get_site_dir", return_value=tmp_path),
+            patch("grunt_cli.commands.init.get_bench_dir", return_value=tmp_path),
+            patch("grunt_cli.commands.init.get_current_site", return_value=site),
         ):
             result = runner.invoke(cli, ["init"], input="n\n")
 
-        env_content = (tmp_path / ".env").read_text()
+        assert result.exit_code == 0, result.output
+        env_content = (site / ".env").read_text()
         assert "change-me" not in env_content
         assert "SECRET_KEY=" in env_content
+        mock_mise.assert_called_once_with(
+            tmp_path / "apps" / "grunt", "setup", env={"DOTENV_PATH": str(site / ".env")}
+        )
 
-    @patch("grunt_cli.commands.init.install_npm_deps")
-    @patch("grunt_cli.commands.init.ensure_venv")
+    @patch("grunt_cli.commands.init.run_mise", return_value=True)
     @patch("grunt_cli.commands.init.clone_grunt")
-    def test_init_bench_creates_structure(self, mock_clone, mock_venv, mock_npm, runner, tmp_path):
+    def test_init_bench_creates_structure(self, mock_clone, mock_mise, runner, tmp_path):
         """grunt init my-bench — створює bench-структуру."""
         mock_clone.return_value = tmp_path / "my-bench" / "apps" / "grunt"
         with runner.isolated_filesystem(temp_dir=tmp_path):
             result = runner.invoke(cli, ["init", "my-bench"])
-            assert result.exit_code == 0
+            assert result.exit_code == 0, result.output
             bench = Path("my-bench")
             assert (bench / "apps").is_dir()
             assert (bench / "sites").is_dir()
+            assert (bench / "logs" / "web").is_dir()
 
 
 # ── grunt db ────────────────────────────────────────────────────
@@ -330,18 +322,20 @@ class TestAuth:
 
 class TestApp:
     def test_app_create(self, runner, tmp_path):
-        with patch("grunt_cli.commands.app.get_apps_dir", return_value=tmp_path):
-            result = runner.invoke(cli, ["app", "create", "my_app", "--title", "My App"])
-            assert result.exit_code == 0
-            app_dir = tmp_path / "my_app"
-            assert app_dir.exists()
-            assert (app_dir / "app.json").exists()
-            assert (app_dir / "doctypes").is_dir()
-            assert (app_dir / "fixtures").is_dir()
+        # title, опис, автор, email, версія, іконка, колір, модуль, git
+        answers = "My App\n\nMe\nme@example.com\n\n\n\n\nn\n"
+        result = runner.invoke(
+            cli, ["app", "create", "my_app", "--dest", str(tmp_path), "--no-git"], input=answers
+        )
+        assert result.exit_code == 0, result.output
+        app_dir = tmp_path / "my_app"
+        assert (app_dir / "my_app" / "hooks.py").exists()
+        assert (app_dir / "my_app" / "doctypes").is_dir()
+        assert (app_dir / "my_app" / "fixtures").is_dir()
 
-            meta = json.loads((app_dir / "app.json").read_text())
-            assert meta["name"] == "my_app"
-            assert meta["title"] == "My App"
+        meta = json.loads((app_dir / "app.json").read_text())
+        assert meta["name"] == "my_app"
+        assert meta["title"] == "My App"
 
     def test_app_create_already_exists(self, runner, tmp_path):
         (tmp_path / "my_app").mkdir()
@@ -349,26 +343,31 @@ class TestApp:
             result = runner.invoke(cli, ["app", "create", "my_app"])
             assert result.exit_code != 0
 
-    def test_app_install_local(self, runner, tmp_path):
+    @patch("subprocess.run", return_value=MagicMock(returncode=0))
+    def test_app_install_local(self, mock_run, runner, tmp_path):
         bench = tmp_path / "bench"
+        (bench / "apps" / "grunt").mkdir(parents=True)
         (bench / "apps" / "my_app").mkdir(parents=True)
-        (bench / "apps" / "my_app" / "app.json").write_text(
-            json.dumps({"name": "my_app", "title": "My App", "version": "0.1.0", "modules": []})
-        )
         site = bench / "sites" / "test-site"
         site.mkdir(parents=True)
         (site / "grunt.site").write_text(json.dumps({"installed_apps": ["grunt"]}))
+        (site / ".env").write_text("DEBUG=true\n")
 
-        with (
-            patch("grunt_cli.commands.app.get_apps_dir", return_value=bench / "apps"),
-            patch("grunt_cli.commands.app.get_site_dir", return_value=None),
-            patch("grunt_cli.helpers.get_bench_dir", return_value=bench),
-        ):
+        with patch("grunt_cli.helpers.get_bench_dir", return_value=bench):
             result = runner.invoke(cli, ["app", "install", "my_app", "--site", "test-site"])
-            assert result.exit_code == 0
 
-            config = json.loads((site / "grunt.site").read_text())
-            assert "my_app" in config["installed_apps"]
+        assert result.exit_code == 0, result.output
+        cmd = mock_run.call_args.args[0]
+        assert "_do_install('my_app', site='test-site')" in cmd[-1]
+        assert mock_run.call_args.kwargs["env"]["DOTENV_PATH"] == str(site / ".env")
+
+    def test_app_install_unknown_app(self, runner, tmp_path):
+        bench = tmp_path / "bench"
+        (bench / "apps").mkdir(parents=True)
+        with patch("grunt_cli.helpers.get_bench_dir", return_value=bench):
+            result = runner.invoke(cli, ["app", "install", "nope"])
+        assert result.exit_code != 0
+        assert "не знайдено" in result.output
 
     @patch("grunt_cli.helpers.subprocess.run")
     def test_app_get(self, mock_run, runner, tmp_path):
@@ -426,51 +425,37 @@ class TestApp:
 
 
 class TestDoctype:
-    @patch("grunt_cli.commands.doctype.httpx.get")
-    @patch("grunt_cli.commands.doctype.auth_headers")
-    def test_doctype_list(self, mock_auth, mock_get, runner):
-        mock_auth.return_value = {"Authorization": "Bearer tok"}
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "data": [
-                {
-                    "name": "User",
-                    "label": "Користувач",
-                    "module": "Core",
-                    "fields": [{"fieldname": "email"}],
-                    "is_child": False,
-                }
-            ]
-        }
-        mock_resp.raise_for_status = MagicMock()
-        mock_get.return_value = mock_resp
-
-        result = runner.invoke(cli, ["doctype", "list"])
+    @patch("grunt_cli.commands.doctype.venv_delegate", return_value=0)
+    def test_doctype_list_delegates_to_framework(self, mock_delegate, runner):
+        result = runner.invoke(cli, ["doctype", "list", "--module", "Core"])
         assert result.exit_code == 0
-        assert "User" in result.output
+        mock_delegate.assert_called_once_with("doctype", "list", "--module", "Core", site=None)
 
-    @patch("grunt_cli.commands.doctype.httpx.get")
-    @patch("grunt_cli.commands.doctype.auth_headers")
-    def test_doctype_show_not_found(self, mock_auth, mock_get, runner):
-        mock_auth.return_value = {"Authorization": "Bearer tok"}
-        mock_resp = MagicMock()
-        mock_resp.status_code = 404
-        mock_get.return_value = mock_resp
+    @patch("grunt_cli.commands.doctype.venv_delegate", return_value=-1)
+    def test_doctype_list_outside_project(self, _delegate, runner):
+        result = runner.invoke(cli, ["doctype", "list"])
+        assert "Backend CLI не знайдено" in result.output
 
+    @patch("grunt_cli.commands.doctype.find_doctype_json", return_value=None)
+    def test_doctype_show_not_found(self, _find, runner):
         result = runner.invoke(cli, ["doctype", "show", "NonExistent"])
+        assert result.exit_code != 0
         assert "не знайдено" in result.output
 
-    @patch("grunt_cli.commands.doctype.httpx.get")
-    @patch("grunt_cli.commands.doctype.auth_headers")
-    def test_doctype_list_server_unavailable(self, mock_auth, mock_get, runner):
-        import httpx
-
-        mock_auth.return_value = {"Authorization": "Bearer tok"}
-        mock_get.side_effect = httpx.ConnectError("Connection refused")
-
-        result = runner.invoke(cli, ["doctype", "list"])
-        assert "підключитись" in result.output
+    @patch("grunt_cli.commands.doctype.find_doctype_json")
+    def test_doctype_show_fields(self, mock_find, runner):
+        mock_find.return_value = {
+            "name": "User",
+            "module": "Core",
+            "fields": [
+                {"fieldname": "email", "label": "Email", "fieldtype": "Data", "required": 1},
+                {"fieldname": "sb", "fieldtype": "Section"},
+            ],
+        }
+        result = runner.invoke(cli, ["doctype", "show", "User"])
+        assert result.exit_code == 0
+        assert "email" in result.output
+        assert "sb" not in result.output
 
 
 # ── grunt sites ──────────────────────────────────────────────────
@@ -480,7 +465,6 @@ class TestSites:
     def test_sites_list_no_bench_no_site(self, runner):
         with (
             patch("grunt_cli.commands.sites.get_bench_dir", return_value=None),
-            patch("grunt_cli.commands.sites.get_site_dir", return_value=None),
         ):
             result = runner.invoke(cli, ["sites", "list"])
             assert result.exit_code == 0
@@ -509,19 +493,22 @@ class TestSites:
             assert result.exit_code == 0
             assert "не знайдено" in result.output
 
-    @patch("grunt_cli.commands.sites.run_alembic", return_value=True)
-    def test_sites_new(self, mock_alembic, runner, tmp_path):
+    @patch("grunt_cli.commands.sites.run_mise", return_value=True)
+    def test_sites_new(self, mock_mise, runner, tmp_path):
         bench = tmp_path / "bench"
         (bench / "apps" / "grunt").mkdir(parents=True)
         (bench / "sites").mkdir(parents=True)
 
         with patch("grunt_cli.commands.sites.get_bench_dir", return_value=bench):
             result = runner.invoke(cli, ["sites", "new", "test-site"])
-            assert result.exit_code == 0
+            assert result.exit_code == 0, result.output
             site_dir = bench / "sites" / "test-site"
             assert (site_dir / "grunt.site").exists()
             assert (site_dir / ".env").exists()
             assert (bench / "sites" / "currentsite.txt").read_text() == "test-site"
+        mock_mise.assert_called_once_with(
+            bench / "apps" / "grunt", "db:migrate", env={"DOTENV_PATH": str(site_dir / ".env")}
+        )
 
     def test_sites_new_already_exists(self, runner, tmp_path):
         bench = tmp_path / "bench"
@@ -562,12 +549,23 @@ class TestSites:
 
 
 class TestUpdate:
+    @patch("grunt_cli.commands.update._restart_production", return_value=True)
+    @patch("grunt_cli.commands.update._run_migrations", return_value=True)
+    @patch("grunt_cli.commands.update._run_npm_install")
+    @patch("grunt_cli.commands.update._update_python_packages")
+    @patch("grunt_cli.commands.update._update_runtimes")
     @patch("grunt_cli.commands.update._get_cli_dir", return_value=None)
     @patch("grunt_cli.commands.update._find_apps_dir", return_value=None)
-    def test_update_nothing_found(self, mock_apps, mock_cli, runner):
+    def test_update_nothing_found(
+        self, _apps, _cli, _runtimes, _packages, _npm, _migrate, _restart, runner
+    ):
+        # Кроки пакетів/міграцій замокані: інакше тест справді запускав би
+        # `uv sync --upgrade` у поточній теці.
         result = runner.invoke(cli, ["update"])
-        assert result.exit_code == 0
-        assert "Нічого не оновлено" in result.output
+        assert result.exit_code == 0, result.output
+        assert "grunt-cli не встановлений" in result.output
+        assert "Grunt framework не знайдено" in result.output
+        assert "Директорію додатків не знайдено" in result.output
 
     @patch("grunt_cli.commands.update.subprocess.run")
     @patch("grunt_cli.commands.update._get_cli_dir")
@@ -707,16 +705,12 @@ class TestUpdateRestart:
 
 
 class TestMaster:
-    @patch("grunt_cli.commands.master.install_npm_deps", return_value=True)
-    @patch("grunt_cli.commands.master.ensure_venv")
+    @patch("grunt_cli.commands.master.run_mise", return_value=True)
     @patch("grunt_cli.commands.master.clone_grunt")
-    @patch("grunt_cli.commands.master.run_alembic", return_value=True)
     def test_master_creates_bench_sqlite(
         self,
-        mock_alembic,
         mock_clone,
-        mock_venv,
-        mock_npm,
+        mock_mise,
         runner,
         tmp_path,
     ):
@@ -740,23 +734,20 @@ class TestMaster:
             assert "sqlite+aiosqlite:///./grunt.db" in env
             assert "SECRET_KEY=" in env
 
-    @patch("grunt_cli.commands.master.install_npm_deps", return_value=True)
-    @patch("grunt_cli.commands.master.ensure_venv")
+    @patch("grunt_cli.commands.master.run_mise", return_value=True)
     @patch("grunt_cli.commands.master.clone_grunt")
-    @patch("grunt_cli.commands.master.run_alembic", return_value=True)
     def test_master_creates_bench_postgres(
         self,
-        mock_alembic,
         mock_clone,
-        mock_venv,
-        mock_npm,
+        mock_mise,
         runner,
         tmp_path,
     ):
         mock_clone.return_value = tmp_path / "proj" / "apps" / "grunt"
 
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            # input: project, site, db_choice=2(postgres), host, port, user, password, db_name, port, no admin, no serve
+            # input: project, site, db=2 (postgres), host, port, user, password, db name,
+            # backend port, no admin, no serve
             result = runner.invoke(
                 cli,
                 ["master"],
@@ -766,23 +757,20 @@ class TestMaster:
             env = (Path("proj") / "sites" / "prod.example.com" / ".env").read_text()
             assert "postgresql+asyncpg://postgres:secret@localhost:5432/mydb" in env
 
-    @patch("grunt_cli.commands.master.install_npm_deps", return_value=True)
-    @patch("grunt_cli.commands.master.ensure_venv")
+    @patch("grunt_cli.commands.master.run_mise", return_value=True)
     @patch("grunt_cli.commands.master.clone_grunt")
-    @patch("grunt_cli.commands.master.run_alembic", return_value=True)
     def test_master_creates_bench_mysql(
         self,
-        mock_alembic,
         mock_clone,
-        mock_venv,
-        mock_npm,
+        mock_mise,
         runner,
         tmp_path,
     ):
         mock_clone.return_value = tmp_path / "proj" / "apps" / "grunt"
 
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            # input: project, site, db_choice=3(mysql), host, port, user, password(empty), db_name, port, no admin, no serve
+            # input: project, site, db=3 (mysql), host, port, user, empty password, db name,
+            # backend port, no admin, no serve
             result = runner.invoke(
                 cli,
                 ["master"],
@@ -792,14 +780,12 @@ class TestMaster:
             env = (Path("proj") / "sites" / "dev.local" / ".env").read_text()
             assert "mysql+aiomysql://root@localhost:3306/grunt" in env
 
-    @patch("grunt_cli.commands.master.install_npm_deps", return_value=True)
-    @patch("grunt_cli.commands.master.ensure_venv")
+    @patch("grunt_cli.commands.master.run_mise", return_value=True)
     @patch("grunt_cli.commands.master.clone_grunt")
     def test_master_existing_dir_fails(
         self,
         mock_clone,
-        mock_venv,
-        mock_npm,
+        mock_mise,
         runner,
         tmp_path,
     ):
@@ -1003,3 +989,128 @@ class TestNpmInstall:
 
         (tmp_path / "package-lock.json").unlink()
         assert _package_lock_stale(tmp_path) is False
+
+
+class TestUpdateToRelease:
+    """_update_repo: прод і репо на тезі — на реліз-теги, розробка — голова гілки."""
+
+    GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+
+    def _commit(self, repo, msg, tag=None):
+        subprocess.run(
+            [*self.GIT, "-C", str(repo), "commit", "-q", "--allow-empty", "-m", msg], check=True
+        )
+        if tag:
+            subprocess.run([*self.GIT, "-C", str(repo), "tag", "-a", tag, "-m", tag], check=True)
+
+    def _repo(self, tmp_path, tags=("v0.1.0", "v0.2.0")):
+        upstream = tmp_path / "up"
+        subprocess.run(["git", "init", "-q", "-b", "master", str(upstream)], check=True)
+        self._commit(upstream, "a", tags[0] if tags else None)
+        wc = tmp_path / "wc"
+        subprocess.run(["git", "clone", "-q", str(upstream), str(wc)], check=True)
+        for i, tag in enumerate(tags[1:]):
+            self._commit(upstream, f"r{i}", tag)
+        self._commit(upstream, "unreleased")
+        return upstream, wc
+
+    @staticmethod
+    def _head(repo, *rev):
+        return subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", *(rev or ("HEAD",))],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    def _at(self, wc, ref):
+        return self._head(wc) == self._head(wc, f"{ref}^{{commit}}")
+
+    def test_production_goes_to_latest_release(self, tmp_path):
+        from grunt_cli.commands.update import _update_repo
+
+        _, wc = self._repo(tmp_path)
+        assert _update_repo(wc, "wc", tag=None, branch=False, production=True)
+        assert self._at(wc, "v0.2.0")
+
+    def test_development_follows_branch(self, tmp_path):
+        from grunt_cli.commands.update import _update_repo
+
+        up, wc = self._repo(tmp_path)
+        assert _update_repo(wc, "wc", tag=None, branch=False, production=False)
+        assert self._head(wc) == self._head(up)
+
+    def test_production_without_tags_follows_branch(self, tmp_path):
+        from grunt_cli.commands.update import _update_repo
+
+        up, wc = self._repo(tmp_path, tags=())
+        assert _update_repo(wc, "wc", tag=None, branch=False, production=True)
+        assert self._head(wc) == self._head(up)
+
+    def test_repo_on_a_tag_moves_to_newer_release(self, tmp_path):
+        from grunt_cli.commands.update import _update_repo
+
+        up, wc = self._repo(tmp_path)
+        assert _update_repo(wc, "wc", tag="v0.1.0", branch=False, production=False)
+        self._commit(up, "next", "v0.3.0")
+        assert _update_repo(wc, "wc", tag=None, branch=False, production=False)
+        assert self._at(wc, "v0.3.0")
+
+    def test_pin_older_release_warns_about_migrations(self, tmp_path, capsys):
+        from grunt_cli.commands.update import _update_repo
+
+        _, wc = self._repo(tmp_path)
+        assert _update_repo(wc, "wc", tag=None, branch=False, production=True)
+        assert _update_repo(wc, "wc", tag="v0.1.0", branch=False, production=True)
+        assert self._at(wc, "v0.1.0")
+        assert "міграції БД назад не відкочуються" in capsys.readouterr().out
+
+    def test_unknown_release_fails(self, tmp_path):
+        from grunt_cli.commands.update import _update_repo
+
+        _, wc = self._repo(tmp_path)
+        assert not _update_repo(wc, "wc", tag="v9.9.9", branch=False, production=True)
+
+    def test_branch_flag_leaves_the_tag(self, tmp_path):
+        from grunt_cli.commands.update import _update_repo
+
+        up, wc = self._repo(tmp_path)
+        assert _update_repo(wc, "wc", tag=None, branch=False, production=True)
+        assert _update_repo(wc, "wc", tag=None, branch=True, production=True)
+        assert self._head(wc) == self._head(up)
+        assert self._head(wc, "--abbrev-ref", "HEAD") == "master"
+
+    def test_local_changes_block_the_release(self, tmp_path):
+        from grunt_cli.commands.update import _update_repo
+
+        _, wc = self._repo(tmp_path)
+        (wc / "f.txt").write_text("1")
+        subprocess.run([*self.GIT, "-C", str(wc), "add", "f.txt"], check=True)
+        before = self._head(wc)
+        assert not _update_repo(wc, "wc", tag=None, branch=False, production=True)
+        assert self._head(wc) == before
+
+    def test_tag_and_branch_are_exclusive(self, runner):
+        result = runner.invoke(cli, ["update", "--tag", "--branch"])
+        assert result.exit_code != 0
+        assert "взаємовиключні" in result.output
+
+
+class TestPythonPackages:
+    """uv.lock під git: grunt update ставить закомічені версії і не переписує lock."""
+
+    @pytest.mark.parametrize(("has_lock", "mode"), [(True, "--locked"), (False, "--upgrade")])
+    @patch("grunt_cli.commands.update.find_uv", return_value="/usr/bin/uv")
+    @patch("grunt_cli.commands.update.subprocess.run", return_value=MagicMock(returncode=0))
+    def test_sync_mode_follows_lockfile(self, mock_run, _uv, tmp_path, monkeypatch, has_lock, mode):
+        from grunt_cli.commands.update import _update_python_packages
+
+        (tmp_path / "apps" / "grunt").mkdir(parents=True)
+        if has_lock:
+            (tmp_path / "apps" / "grunt" / "uv.lock").write_text("")
+        monkeypatch.setattr("grunt_cli.commands.update._find_apps_dir", lambda: tmp_path / "apps")
+
+        _update_python_packages()
+
+        sync = mock_run.call_args_list[0].args[0]
+        assert sync[:3] == ["/usr/bin/uv", "sync", mode]

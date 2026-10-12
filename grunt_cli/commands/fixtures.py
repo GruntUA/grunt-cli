@@ -40,7 +40,7 @@ def fixtures_dump(
             parsed_filters = json.loads(filters)
         except json.JSONDecodeError:
             console.print(f"[red]✗[/red] Невірний JSON у --filters: {filters}")
-            raise SystemExit(1)
+            raise SystemExit(1) from None
 
     output_file = output or f"{doctype.lower()}_fixtures.json"
     per_page = limit or 1000
@@ -57,11 +57,14 @@ site = os.environ.get('GRUNT_SITE')
 
 async def _run():
     async with _site_session(site) as (session, _):
-        items = await grunt.get_list({doctype!r}, session=session, per_page={per_page}, filters={filters_repr})
+        items = await grunt.get_list(
+            {doctype!r}, session=session, per_page={per_page}, filters={filters_repr}
+        )
         result = {{"doctype": {doctype!r}, "records": items, "count": len(items)}}
         out_file = {output_repr}
         import pathlib
-        pathlib.Path(out_file).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        text = json.dumps(result, ensure_ascii=False, indent=2)
+        pathlib.Path(out_file).write_text(text, encoding="utf-8")
         print(f"Exported {{len(items)}} records to {{out_file}}")
 
 asyncio.run(_run())
@@ -95,7 +98,7 @@ def fixtures_load(file: str, mode: str, skip_errors: bool, site: str | None) -> 
         data = json.loads(Path(file).read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         console.print(f"[red]✗[/red] Помилка JSON у файлі: {e}")
-        raise SystemExit(1)
+        raise SystemExit(1) from None
 
     doctype = data.get("doctype")
     records = data.get("records", [])

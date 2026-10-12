@@ -8,7 +8,7 @@ import shutil
 
 import click
 
-from grunt_cli.helpers import console, get_bench_dir, get_site_dir, run_mise
+from grunt_cli.helpers import console, get_bench_dir, run_mise
 
 
 @click.group()
@@ -21,6 +21,7 @@ def sites() -> None:
 # ---------------------------------------------------------------------------
 
 
+@sites.command("list")
 def sites_list() -> None:
     """Показує список сайтів."""
     bench = get_bench_dir()

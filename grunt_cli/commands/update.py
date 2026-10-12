@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -23,50 +24,28 @@ from grunt_cli.helpers import (
     venv_delegate,
 )
 
+# Реліз = анотований тег vX.Y.Z (`grunt release` у фреймворку). Пре-релізи
+# (v1.2.0-rc1) на прод не ставимо.
+_RELEASE_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 
-def _git_pull(path: Path, label: str) -> bool:
-    """Виконує git fetch + rebase у вказаній директорії. Повертає True якщо успішно."""
-    if not (path / ".git").exists():
-        console.print(f"  [yellow]⚠[/yellow]  {label}: не є git-репозиторієм, пропускаю")
-        return False
 
-    # Перевіряємо поточну гілку
-    branch_result = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        cwd=str(path),
-        capture_output=True,
-        text=True,
-    )
-    branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "?"
+def _git(path: Path, *args: str, env: dict[str, str] | None = None):
+    return subprocess.run(["git", *args], cwd=str(path), capture_output=True, text=True, env=env)
 
-    # Зберігаємо поточний коміт для порівняння
-    old_hash = subprocess.run(
-        ["git", "rev-parse", "--short", "HEAD"],
-        cwd=str(path),
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
 
-    console.print(f"  [dim]Оновлюю {label} ({branch})...[/dim]")
+def _short_head(path: Path) -> str:
+    return _git(path, "rev-parse", "--short", "HEAD").stdout.strip()
 
+
+def _git_fetch(path: Path, label: str, *args: str) -> bool:
+    """``git fetch`` з одним повтором після запиту токена GitHub."""
     # Без інтерактивного запиту логіна від git — токен питаємо самі.
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-    remote = subprocess.run(
-        ["git", "remote", "get-url", "origin"], cwd=str(path), capture_output=True, text=True
-    ).stdout.strip()
+    remote = _git(path, "remote", "get-url", "origin").stdout.strip()
     github_path = github_repo_path(remote)
 
-    # fetch + rebase на @{upstream} замість git pull: pull бере ціль з
-    # .git/FETCH_HEAD, а паралельний fetch (напр. autofetch у VS Code) дописує
-    # туди дублікат — і pull падає з "Cannot rebase onto multiple branches".
     for attempt in range(2):
-        result = subprocess.run(
-            ["git", "fetch"],
-            cwd=str(path),
-            env=env,
-            capture_output=True,
-            text=True,
-        )
+        result = _git(path, "fetch", *args, env=env)
         auth_error = result.returncode != 0 and any(
             marker in result.stderr.lower()
             for marker in ("could not read username", "authentication failed", "not found")
@@ -77,75 +56,173 @@ def _git_pull(path: Path, label: str) -> bool:
             break
 
     if result.returncode == 0:
-        result = subprocess.run(
-            ["git", "rebase", "--autostash", "@{upstream}"],
-            cwd=str(path),
-            env=env,
-            capture_output=True,
-            text=True,
+        return True
+    if auth_error:
+        console.print(f"  [yellow]⚠[/yellow]  {label}: немає доступу до {remote}")
+        console.print(
+            "    [dim]Запустіть grunt update у терміналі — він запитає токен GitHub[/dim]"
         )
-        if result.returncode != 0 and any(
-            (path / ".git" / d).exists() for d in ("rebase-merge", "rebase-apply")
-        ):
-            # Конфлікт — повертаємо репозиторій у стан до оновлення.
-            subprocess.run(
-                ["git", "rebase", "--abort"], cwd=str(path), capture_output=True, text=True
-            )
-
-    if result.returncode != 0:
+    else:
+        console.print(f"  [red]✗[/red] {label}: помилка оновлення з git")
         stderr = (result.stderr or result.stdout).strip()
-        if auth_error:
-            console.print(f"  [yellow]⚠[/yellow]  {label}: немає доступу до {remote}")
-            console.print(
-                "    [dim]Запустіть grunt update у терміналі — він запитає токен GitHub[/dim]"
-            )
-        else:
-            console.print(f"  [red]✗[/red] {label}: помилка оновлення з git")
-            if stderr:
-                console.print(f"    [dim]{stderr}[/dim]")
+        if stderr:
+            console.print(f"    [dim]{stderr}[/dim]")
+    return False
+
+
+def _git_pull(path: Path, label: str) -> bool:
+    """Виконує git fetch + rebase у вказаній директорії. Повертає True якщо успішно."""
+    if not (path / ".git").exists():
+        console.print(f"  [yellow]⚠[/yellow]  {label}: не є git-репозиторієм, пропускаю")
         return False
 
-    new_hash = subprocess.run(
-        ["git", "rev-parse", "--short", "HEAD"],
-        cwd=str(path),
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    branch_result = _git(path, "rev-parse", "--abbrev-ref", "HEAD")
+    branch = branch_result.stdout.strip() if branch_result.returncode == 0 else "?"
+    old_hash = _short_head(path)
 
+    console.print(f"  [dim]Оновлюю {label} ({branch})...[/dim]")
+
+    # fetch + rebase на @{upstream} замість git pull: pull бере ціль з
+    # .git/FETCH_HEAD, а паралельний fetch (напр. autofetch у VS Code) дописує
+    # туди дублікат — і pull падає з "Cannot rebase onto multiple branches".
+    if not _git_fetch(path, label):
+        return False
+    result = _git(path, "rebase", "--autostash", "@{upstream}")
+    if result.returncode != 0:
+        if any((path / ".git" / d).exists() for d in ("rebase-merge", "rebase-apply")):
+            # Конфлікт — повертаємо репозиторій у стан до оновлення.
+            _git(path, "rebase", "--abort")
+        console.print(f"  [red]✗[/red] {label}: помилка оновлення з git")
+        stderr = (result.stderr or result.stdout).strip()
+        if stderr:
+            console.print(f"    [dim]{stderr}[/dim]")
+        return False
+
+    _report_change(path, label, old_hash, _short_head(path))
+    return True
+
+
+def release_tags(path: Path) -> list[str]:
+    """Реліз-теги репозиторію, від найновішого."""
+    found = {}
+    for tag in _git(path, "tag", "--list", "v[0-9]*").stdout.split():
+        if m := _RELEASE_TAG.match(tag):
+            found[tag] = tuple(int(n) for n in m.groups())
+    return sorted(found, key=found.__getitem__, reverse=True)
+
+
+def _current_tag(path: Path) -> str | None:
+    """Реліз-тег, на якому стоїть HEAD (відʼєднаний), або None."""
+    if _git(path, "symbolic-ref", "-q", "HEAD").returncode == 0:
+        return None  # на гілці
+    tags = _git(path, "tag", "--points-at", "HEAD").stdout.split()
+    found = [t for t in tags if _RELEASE_TAG.match(t)]
+    return found[0] if found else None
+
+
+def _git_checkout_tag(path: Path, label: str, tag: str | None) -> bool:
+    """Поставити репозиторій на реліз ``tag`` (None — найновіший)."""
+    if not (path / ".git").exists():
+        console.print(f"  [yellow]⚠[/yellow]  {label}: не є git-репозиторієм, пропускаю")
+        return False
+    console.print(f"  [dim]Оновлюю {label} (релізи)...[/dim]")
+    if not _git_fetch(path, label, "--tags", "--force"):
+        return False
+
+    tags = release_tags(path)
+    target = tag or (tags[0] if tags else None)
+    if target is None or target not in tags:
+        console.print(f"  [red]✗[/red] {label}: немає релізу {target or '(жодного тегу vX.Y.Z)'}")
+        return False
+
+    current = _current_tag(path)
+    if current == target:
+        console.print(f"  [green]✓[/green] {label}: вже на {target}")
+        return True
+    # Локальні правки на проді не відкладаємо мовчки (як autostash у гілці).
+    if _git(path, "status", "--porcelain", "--untracked-files=no").stdout.strip():
+        console.print(f"  [red]✗[/red] {label}: є незакомічені зміни — реліз не встановлено")
+        return False
+
+    old_hash = _short_head(path)
+    result = _git(path, "checkout", "-q", "--detach", target)
+    if result.returncode != 0:
+        console.print(f"  [red]✗[/red] {label}: не вдалося перейти на {target}")
+        console.print(f"    [dim]{(result.stderr or result.stdout).strip()}[/dim]")
+        return False
+
+    was = current or old_hash
+    console.print(f"  [green]✓[/green] {label}: {was} → {target}")
+    if current and tags.index(target) > tags.index(current):
+        console.print(
+            "    [yellow]Відкат на старіший реліз: міграції БД назад не відкочуються[/yellow]"
+        )
+    _report_change(path, label, old_hash, _short_head(path), quiet=True)
+    return True
+
+
+def _switch_to_branch(path: Path, label: str) -> bool:
+    """Повернути відʼєднаний HEAD (після релізу) на гілку origin/HEAD."""
+    if _git(path, "symbolic-ref", "-q", "HEAD").returncode == 0:
+        return True
+    ref = _git(path, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD").stdout.strip()
+    branch = ref.removeprefix("origin/") or "master"
+    result = _git(path, "checkout", "-q", branch)
+    if result.returncode != 0:
+        console.print(f"  [red]✗[/red] {label}: не вдалося перейти на гілку {branch}")
+        return False
+    console.print(f"  [dim]{label}: повернуто на гілку {branch}[/dim]")
+    return True
+
+
+def _update_repo(
+    path: Path, label: str, *, tag: str | None, branch: bool, production: bool
+) -> bool:
+    """Оновити репозиторій: на реліз-тег або на голову гілки.
+
+    \b
+    --branch          → гілка
+    --tag [vX.Y.Z]    → реліз (без значення — найновіший)
+    HEAD уже на тезі  → найновіший реліз
+    прод і є релізи   → найновіший реліз
+    інакше            → гілка (розробка; репо без тегів)
+    """
+    if branch:
+        return _switch_to_branch(path, label) and _git_pull(path, label)
+    has_git = (path / ".git").exists()
+    if tag is not None or (has_git and (_current_tag(path) or (production and release_tags(path)))):
+        return _git_checkout_tag(path, label, None if tag in (None, "latest") else tag)
+    return _git_pull(path, label)
+
+
+def _report_change(
+    path: Path, label: str, old_hash: str, new_hash: str, quiet: bool = False
+) -> None:
     if old_hash == new_hash:
-        console.print(f"  [green]✓[/green] {label}: вже актуальний ({old_hash})")
-    else:
+        if not quiet:
+            console.print(f"  [green]✓[/green] {label}: вже актуальний ({old_hash})")
+        return
+    if not quiet:
         console.print(f"  [green]✓[/green] {label}: оновлено {old_hash} → {new_hash}")
 
-        # Відображення статистики змін
-        diff_result = subprocess.run(
-            ["git", "diff", "--stat", f"{old_hash}..{new_hash}"],
-            cwd=str(path),
-            capture_output=True,
-            text=True,
-        )
-        if diff_result.returncode == 0:
-            stats = diff_result.stdout.strip()
-            if stats:
-                import re  # noqa: PLC0415
-
-                for line in stats.splitlines():
-                    line = line.strip()
-                    if "changed" in line and ("insertion" in line or "deletion" in line):
-                        # Підсвічуємо підсумок: (+) зеленим, (-) червоним
-                        line = line.replace("(+)", "[green](+)[/green]")
-                        line = line.replace("(-)", "[red](-)[/red]")
-                        console.print(f"    [cyan]{line}[/cyan]")
-                    else:
-                        # Підсвічуємо гістограму: + зеленим, - червоним
-                        if "|" in line:
-                            path_part, stats_part = line.rsplit("|", 1)
-                            stats_part = re.sub(r"(\++)", r"[green]\1[/green]", stats_part)
-                            stats_part = re.sub(r"(-+)", r"[red]\1[/red]", stats_part)
-                            line = f"{path_part}|{stats_part}"
-                        console.print(f"    [dim]{line}[/dim]")
-
-    return True
+    # Відображення статистики змін
+    diff_result = _git(path, "diff", "--stat", f"{old_hash}..{new_hash}")
+    stats = diff_result.stdout.strip() if diff_result.returncode == 0 else ""
+    for line in stats.splitlines():
+        line = line.strip()
+        if "changed" in line and ("insertion" in line or "deletion" in line):
+            # Підсвічуємо підсумок: (+) зеленим, (-) червоним
+            line = line.replace("(+)", "[green](+)[/green]")
+            line = line.replace("(-)", "[red](-)[/red]")
+            console.print(f"    [cyan]{line}[/cyan]")
+        else:
+            # Підсвічуємо гістограму: + зеленим, - червоним
+            if "|" in line:
+                path_part, stats_part = line.rsplit("|", 1)
+                stats_part = re.sub(r"(\++)", r"[green]\1[/green]", stats_part)
+                stats_part = re.sub(r"(-+)", r"[red]\1[/red]", stats_part)
+                line = f"{path_part}|{stats_part}"
+            console.print(f"    [dim]{line}[/dim]")
 
 
 # npm без package-lock.json: не читає і не переписує його (він під git).
@@ -234,29 +311,34 @@ def _update_runtimes() -> None:
 
 
 def _update_python_packages() -> None:
-    """Оновити Python пакети (uv sync --upgrade або pip)."""
+    """Оновити Python пакети (uv sync --locked за uv.lock, без нього --upgrade; або pip)."""
     import os  # noqa: PLC0415
     import shutil  # noqa: PLC0415
 
     # Перевіряємо наявність uv
     uv_bin = find_uv()
     if uv_bin:
-        console.print("  [dim]Оновлюю Python пакети (uv sync --upgrade)...[/dim]")
         env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
         app_dir = _find_apps_dir()
         cwd_dir = str(app_dir / "grunt") if app_dir else None
         if cwd_dir:
             env["PWD"] = cwd_dir
+        # uv.lock під git: ставимо рівно закомічені версії (нові приходять
+        # комітом/релізом) і не переписуємо lock — інакше брудне дерево
+        # зупинить наступне оновлення. Без lock (старий фреймворк) — --upgrade.
+        locked = bool(cwd_dir) and (Path(cwd_dir) / "uv.lock").exists()
+        mode = "--locked" if locked else "--upgrade"
+        console.print(f"  [dim]Оновлюю Python пакети (uv sync {mode})...[/dim]")
         # --inexact: keep packages outside the framework's lock — the apps
         # (editable) and their dependencies, installed by `grunt app deps`.
         result = subprocess.run(
-            [uv_bin, "sync", "--upgrade", "--all-extras", "--inexact"],
+            [uv_bin, "sync", mode, "--all-extras", "--inexact"],
             cwd=cwd_dir,
             check=False,
             env=env,
         )
         if result.returncode != 0:
-            console.print("  [yellow]⚠[/yellow]  uv sync --upgrade завершився з помилкою")
+            console.print(f"  [yellow]⚠[/yellow]  uv sync {mode} завершився з помилкою")
             return
         apps = subprocess.run(
             [uv_bin, "run", "python", "-m", FRAMEWORK_CLI_MODULE, "app", "deps"],
@@ -458,6 +540,22 @@ _COMPONENTS = ("cli", "framework", "apps", "deps")
     default=False,
     help="Не збирати фронтенд і не перезапускати сервіси (прод)",
 )
+@click.option(
+    "--tag",
+    is_flag=False,
+    flag_value="latest",
+    default=None,
+    metavar="[vX.Y.Z]",
+    help="Фреймворк на реліз-тег (без значення — найновіший; з версією — закріпити/відкотити)."
+    " Додатки — на свій найновіший реліз",
+)
+@click.option(
+    "--branch",
+    "follow_branch",
+    is_flag=True,
+    default=False,
+    help="Голова гілки замість релізів (і повернення з тегу на гілку)",
+)
 @click.option("--site", default=None, help="Назва сайту (для migrate)")
 def update(
     component: str | None,
@@ -470,6 +568,8 @@ def update(
     skip_migrate: bool,
     no_deps: bool,
     no_restart: bool,
+    tag: str | None,
+    follow_branch: bool,
     site: str | None,
 ) -> None:
     """Оновити CLI, фреймворк, додатки, пакети та схему БД.
@@ -478,10 +578,16 @@ def update(
     Послідовність:
       1. git fetch + rebase для CLI, фреймворку та додатків
       2. mise install (системні залежності: Python, Node.js тощо)
-      3. uv sync --upgrade --inexact + grunt app deps (Python пакети фреймворку й додатків)
+      3. uv sync --locked --inexact + grunt app deps (Python пакети фреймворку й додатків)
       4. npm install
       5. grunt migrate (Alembic + DocType-таблиці + fixtures)
       6. прод (є systemd-сервіси): mise run build + перезапуск сервісів
+
+    \b
+    Версії: на проді (є systemd-сервіси) фреймворк і додатки ставляться на
+    найновіший реліз-тег vX.Y.Z; репозиторій без тегів, як і в розробці,
+    оновлюється до голови гілки. Репозиторій, уже поставлений на тег,
+    оновлюється до новішого тегу.
 
     \b
     Без прапорців оновлює все.
@@ -497,7 +603,16 @@ def update(
       grunt update --skip-migrate   без міграцій БД
       grunt update --no-restart     без збірки фронтенду й перезапуску (прод)
       grunt update --no-deps        без перевстановлення залежностей
+      grunt update --tag            фреймворк і додатки — на найновіші релізи
+      grunt update framework --tag v0.2.0   закріпити (або відкотити) версію
+      grunt update --branch         голова гілки замість релізів
     """
+    if tag is not None and follow_branch:
+        raise click.UsageError("--tag і --branch взаємовиключні")
+    bench = get_bench_dir()
+    production = bool(bench and installed_units(bench))
+    app_tag = None if tag is None else "latest"
+
     # `grunt update cli` == `grunt update --cli` тощо
     update_cli = update_cli or component == "cli"
     update_framework = update_framework or component == "framework"
@@ -521,7 +636,9 @@ def update(
         if cli_dir is None:
             console.print("  [yellow]⚠[/yellow]  grunt-cli не встановлений як editable, пропускаю")
         else:
-            _git_pull(cli_dir, "grunt-cli")
+            _update_repo(
+                cli_dir, "grunt-cli", tag=None, branch=follow_branch, production=production
+            )
             if not no_deps:
                 # editable-встановлення підхоплює код і так, а нові залежності
                 # CLI ставить лише перевстановлення (mise-задача install).
@@ -542,7 +659,9 @@ def update(
         if framework_dir is None or not framework_dir.exists():
             console.print("  [yellow]⚠[/yellow]  Grunt framework не знайдено")
         else:
-            _git_pull(framework_dir, "grunt")
+            _update_repo(
+                framework_dir, "grunt", tag=tag, branch=follow_branch, production=production
+            )
             if not no_deps:
                 framework_deps_done = _install_deps(framework_dir, "grunt")
             updated_something = True
@@ -566,7 +685,13 @@ def update(
                 console.print("  [dim]Немає додатків з git-репозиторієм для оновлення[/dim]")
             else:
                 for app_dir in app_dirs:
-                    _git_pull(app_dir, app_dir.name)
+                    _update_repo(
+                        app_dir,
+                        app_dir.name,
+                        tag=app_tag,
+                        branch=follow_branch,
+                        production=production,
+                    )
                     if not no_deps:
                         _install_deps(app_dir, app_dir.name)
                     updated_something = True

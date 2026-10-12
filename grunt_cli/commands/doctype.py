@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 
@@ -136,29 +137,29 @@ def _make_controller(name: str, fields: list[dict] | None = None) -> str:
     needs_datetime = any(f["fieldtype"] in {"Date", "Datetime", "Time"} for f in physical)
     datetime_import = "import datetime\n" if needs_datetime else ""
 
-    I = "    "  # 4-space indent
-    II = I * 2  # 8-space indent
+    ind = "    "
+    ind2 = ind * 2
 
     if physical:
         field_lines = "\n".join(
-            f"{II}{f['fieldname']}: {_FIELDTYPE_TO_PY.get(f['fieldtype'], 'Any')}"
+            f"{ind2}{f['fieldname']}: {_FIELDTYPE_TO_PY.get(f['fieldtype'], 'Any')}"
             + (f"  # {f['label']}" if f.get("label") and f["label"] != f["fieldname"] else "")
             for f in physical
             if f["fieldtype"] not in {"Table", "MultiLink"}
         )
         table_lines = "\n".join(
-            f"{II}{f['fieldname']}: list[dict]  # Table: {f.get('options', '?')}"
+            f"{ind2}{f['fieldname']}: list[dict]  # Table: {f.get('options', '?')}"
             for f in physical
             if f["fieldtype"] == "Table"
         )
         all_field_lines = "\n".join(filter(None, [field_lines, table_lines]))
         type_block = (
-            f"{I}# begin: auto-generated types\n"
-            f"{I}# This code is auto-generated. Do not modify anything in this block.\n"
+            f"{ind}# begin: auto-generated types\n"
+            f"{ind}# This code is auto-generated. Do not modify anything in this block.\n"
             f"\n"
-            f"{I}if TYPE_CHECKING:\n"
+            f"{ind}if TYPE_CHECKING:\n"
             f"{all_field_lines}\n"
-            f"{I}# end: auto-generated types\n"
+            f"{ind}# end: auto-generated types\n"
             f"\n"
         )
         typing_imports = "from typing import TYPE_CHECKING, Any\n"
@@ -179,33 +180,33 @@ def _make_controller(name: str, fields: list[dict] | None = None) -> str:
         f"\n"
         f"\n"
         f"class {name}Controller:\n"
-        f'{I}"""Controller for {name} documents."""\n'
+        f'{ind}"""Controller for {name} documents."""\n'
         f"\n"
         f"{type_block}"
-        f"{I}def __init__(self, doc: dict[str, Any], session: Any | None = None) -> None:\n"
-        f"{II}self.doc = doc\n"
-        f"{II}self.session = session\n"
+        f"{ind}def __init__(self, doc: dict[str, Any], session: Any | None = None) -> None:\n"
+        f"{ind2}self.doc = doc\n"
+        f"{ind2}self.session = session\n"
         f"\n"
-        f"{I}async def before_insert(self) -> None:\n"
-        f'{II}"""Called before inserting a new document."""\n'
+        f"{ind}async def before_insert(self) -> None:\n"
+        f'{ind2}"""Called before inserting a new document."""\n'
         f"\n"
-        f"{I}async def after_insert(self) -> None:\n"
-        f'{II}"""Called after inserting a new document."""\n'
+        f"{ind}async def after_insert(self) -> None:\n"
+        f'{ind2}"""Called after inserting a new document."""\n'
         f"\n"
-        f"{I}async def before_save(self) -> None:\n"
-        f'{II}"""Called before saving (new or existing)."""\n'
+        f"{ind}async def before_save(self) -> None:\n"
+        f'{ind2}"""Called before saving (new or existing)."""\n'
         f"\n"
-        f"{I}async def after_save(self) -> None:\n"
-        f'{II}"""Called after saving."""\n'
+        f"{ind}async def after_save(self) -> None:\n"
+        f'{ind2}"""Called after saving."""\n'
         f"\n"
-        f"{I}async def before_delete(self) -> None:\n"
-        f'{II}"""Called before deletion."""\n'
+        f"{ind}async def before_delete(self) -> None:\n"
+        f'{ind2}"""Called before deletion."""\n'
         f"\n"
-        f"{I}async def after_delete(self) -> None:\n"
-        f'{II}"""Called after deletion."""\n'
+        f"{ind}async def after_delete(self) -> None:\n"
+        f'{ind2}"""Called after deletion."""\n'
         f"\n"
-        f"{I}async def validate(self) -> None:\n"
-        f'{II}"""Called during validation — raise ValueError to block save."""\n'
+        f"{ind}async def validate(self) -> None:\n"
+        f'{ind2}"""Called during validation — raise ValueError to block save."""\n'
     )
 
 
@@ -297,10 +298,11 @@ def _generate_tests(dt: dict) -> str:
     update_flist = optional_fields if optional_fields else required_fields[:1]
     update_dict = fields_dict(update_flist)
 
-    required_assertions = "\n".join(
-        f'        assert data["{f["fieldname"]}"] == {_fake_value(f["fieldtype"], f["fieldname"], f.get("options"))!r}'
-        for f in required_fields
-    )
+    assertion_lines = []
+    for f in required_fields:
+        val = _fake_value(f["fieldtype"], f["fieldname"], f.get("options"))
+        assertion_lines.append(f'        assert data["{f["fieldname"]}"] == {val!r}')
+    required_assertions = "\n".join(assertion_lines)
 
     missing_required_comment = (
         "# No required fields defined — empty payload may succeed"
@@ -381,7 +383,9 @@ class Test{name}CRUD:
         assert create.status_code in (200, 201), create.text
         doc_id = create.json()["data"]["id"]
 
-        resp = await client.put(f"{{BASE_URL}}/{{doc_id}}", json=UPDATE_PAYLOAD, headers=auth_headers)
+        resp = await client.put(
+            f"{{BASE_URL}}/{{doc_id}}", json=UPDATE_PAYLOAD, headers=auth_headers
+        )
         assert resp.status_code == 200, resp.text
 
     async def test_delete_{snake}(self, client: AsyncClient, auth_headers: dict) -> None:
@@ -411,7 +415,9 @@ class Test{name}Validation:
 
     async def test_list_with_filter(self, client: AsyncClient, auth_headers: dict) -> None:
         """List endpoint accepts filter query params without error."""
-        resp = await client.get(BASE_URL, params={{"per_page": "5", "page": "1"}}, headers=auth_headers)
+        resp = await client.get(
+            BASE_URL, params={{"per_page": "5", "page": "1"}}, headers=auth_headers
+        )
         assert resp.status_code == 200
 
     async def test_get_nonexistent(self, client: AsyncClient, auth_headers: dict) -> None:
@@ -487,7 +493,7 @@ def doctype_import(file: str, update: bool, site: str | None) -> None:
         data = json.loads(Path(file).read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         console.print(f"[red]✗[/red] Помилка JSON: {e}")
-        raise SystemExit(1)
+        raise SystemExit(1) from None
 
     doctypes_to_import: list[dict] = []
     if "doctype" in data:
@@ -666,10 +672,8 @@ def doctype_scaffold(name: str, app: str | None, force: bool, py_only: bool) -> 
             dt_dir = matches[0].parent
         json_file = dt_dir / f"{name}.json"
         fields: list[dict] = []
-        try:
+        with contextlib.suppress(Exception):
             fields = json.loads(json_file.read_text(encoding="utf-8")).get("fields", [])
-        except Exception:
-            pass
         py_file = dt_dir / f"{name}.py"
         py_file.write_text(_make_controller(name, fields), encoding="utf-8")
         console.print(f"[green]✓[/green] Контролер перегенеровано: [dim]{py_file}[/dim]")

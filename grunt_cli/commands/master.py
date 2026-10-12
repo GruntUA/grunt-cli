@@ -13,7 +13,6 @@ from grunt_cli.helpers import (
     clone_grunt,
     console,
     run_mise,
-    save_token,
 )
 
 _DB_CHOICES = {
@@ -35,7 +34,7 @@ _DB_CHOICES = {
 def _prompt_database() -> str:
     """Інтерактивний вибір СУБД і побудова DATABASE_URL."""
     console.print("База даних:")
-    for i, (key, info) in enumerate(_DB_CHOICES.items(), 1):
+    for i, (_key, info) in enumerate(_DB_CHOICES.items(), 1):
         console.print(f"  [cyan]{i}[/cyan]) {info['label']}")
 
     choice = click.prompt(
@@ -44,7 +43,6 @@ def _prompt_database() -> str:
         default=1,
     )
     db_key = list(_DB_CHOICES)[choice - 1]
-    db_info = _DB_CHOICES[db_key]
 
     if db_key == "sqlite":
         db_file = click.prompt("  Файл БД", default="grunt.db")
@@ -164,11 +162,12 @@ def master(repo: str, branch: str) -> None:
         if rc == 0:
             console.print(f"[green]✓[/green] Адміністратор {email} створений")
         elif rc != -1:
-            console.print(f"[yellow]⚠[/yellow] Не вдалося створити адміна автоматично.")
+            console.print("[yellow]⚠[/yellow] Не вдалося створити адміна автоматично.")
             console.print("Після запуску: [cyan]grunt users create[/cyan]")
         else:
             console.print(
-                "[yellow]⚠[/yellow] Backend CLI не знайдено. Після запуску: [cyan]grunt users create[/cyan]"
+                "[yellow]⚠[/yellow] Backend CLI не знайдено. "
+                "Після запуску: [cyan]grunt users create[/cyan]"
             )
 
     # ── 12. Фінал ─────────────────────────────────────────────────────

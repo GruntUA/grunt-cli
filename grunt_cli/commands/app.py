@@ -6,14 +6,11 @@ import json
 from pathlib import Path
 
 import click
-from rich import box
-from rich.table import Table
 
 from grunt_cli.helpers import (
     console,
     get_apps_dir,
     get_bench_dir,
-    get_current_site,
     git_clone,
     venv_delegate,
 )
@@ -208,7 +205,8 @@ def app_uninstall(name: str, site: str | None, yes: bool) -> None:
         site_config["installed_apps"] = installed
         site_file.write_text(json.dumps(site_config, ensure_ascii=False, indent=2))
         console.print(
-            f"[green]✓[/green] Додаток [bold]{name}[/bold] видалено з сайту [cyan]{resolved_site_dir.name}[/cyan]"
+            f"[green]✓[/green] Додаток [bold]{name}[/bold] видалено з сайту "
+            f"[cyan]{resolved_site_dir.name}[/cyan]"
         )
         console.print(f"  [dim]Додатки: {', '.join(installed)}[/dim]")
         console.print(f"  [dim]Файли додатку залишено у apps/{name}/[/dim]")
@@ -216,7 +214,8 @@ def app_uninstall(name: str, site: str | None, yes: bool) -> None:
 
     # Fallback: no local site found — cannot uninstall without site info
     console.print(
-        "[red]✗[/red] Сайт не знайдено. Вкажи [cyan]--site <name>[/cyan] або запустіть у папці проекту."
+        "[red]✗[/red] Сайт не знайдено. "
+        "Вкажіть [cyan]--site <name>[/cyan] або запустіть у папці проєкту."
     )
     raise SystemExit(1)
 

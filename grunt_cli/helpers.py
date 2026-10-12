@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import os
-import platform
 import shutil
 import subprocess
 import sys
-import tarfile
-import urllib.request
 from pathlib import Path
 
 from rich.console import Console
