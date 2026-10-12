@@ -578,7 +578,8 @@ def update(
     Послідовність:
       1. git fetch + rebase для CLI, фреймворку та додатків
       2. mise install (системні залежності: Python, Node.js тощо)
-      3. uv sync --locked --inexact + grunt app deps (Python пакети фреймворку й додатків)
+      3. uv sync --locked --inexact + grunt app deps (клонує відсутні додатки з
+         depends_on, ставить Python пакети фреймворку й додатків)
       4. npm install
       5. grunt migrate (Alembic + DocType-таблиці + fixtures)
       6. прод (є systemd-сервіси): mise run build + перезапуск сервісів
