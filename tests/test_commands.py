@@ -1317,6 +1317,7 @@ class TestCleanup:
         monkeypatch.setattr(update, "_in_use", lambda: {**real_in_use(), **held})
         monkeypatch.setattr(update, "find_uv", lambda: "/bin/uv")
         monkeypatch.setattr(update, "get_mise_bin", lambda: None)
+        monkeypatch.setattr(update, "_uv_cache_holders", lambda: "")
         calls = []
 
         def fake_run(cmd, **kwargs):
@@ -1366,6 +1367,36 @@ class TestCleanup:
         assert ["/bin/mise", "uninstall", "node@26.8.1"] not in calls
         assert removed == ["uv 0.11.7 (mise)"]
         assert kept == ["node 26.8.1 (mise) — процес 7 (node)"]
+
+    def test_uv_cache_left_alone_while_uv_run_holds_it(self, tmp_path, monkeypatch):
+        from grunt_cli.commands import update
+
+        self._home(tmp_path, monkeypatch)
+        monkeypatch.setattr(update, "_in_use", dict)
+        monkeypatch.setattr(update, "find_uv", lambda: "/bin/uv")
+        monkeypatch.setattr(update, "get_mise_bin", lambda: None)
+        monkeypatch.setattr(update, "_uv_cache_holders", lambda: "процес 5 (uv run uvicorn)")
+        calls = []
+        monkeypatch.setattr(
+            update.subprocess,
+            "run",
+            lambda cmd, **kw: calls.append(cmd) or MagicMock(returncode=0, stdout="[]"),
+        )
+        _removed, kept = update._cleanup_runtimes()
+        assert ["/bin/uv", "cache", "prune"] not in calls
+        assert kept == ["кеш uv — процес 5 (uv run uvicorn)"]
+
+    def test_slow_cache_cleanup_is_skipped(self, monkeypatch):
+        import subprocess as sp
+
+        from grunt_cli.commands import update
+
+        def slow(cmd, **kwargs):
+            assert kwargs["timeout"] == update._CACHE_TIMEOUT
+            raise sp.TimeoutExpired(cmd, kwargs["timeout"])
+
+        monkeypatch.setattr(update.subprocess, "run", slow)
+        update._quick(["/bin/npm", "cache", "verify"])  # не падає і не висить
 
     @patch("grunt_cli.commands.update._update_python_packages")
     @patch("grunt_cli.commands.update._run_npm_install")

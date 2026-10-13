@@ -413,6 +413,39 @@ def _in_use() -> dict[str, str]:
     return used
 
 
+_CACHE_TIMEOUT = 120
+
+
+def _quick(cmd: list[str], env: dict[str, str] | None = None) -> None:
+    """Чистка кешу — не варта того, щоб чекати на неї довше за пару хвилин."""
+    try:
+        subprocess.run(
+            cmd,
+            capture_output=True,
+            check=False,
+            timeout=_CACHE_TIMEOUT,
+            env={**os.environ, **(env or {})},
+        )
+    except subprocess.TimeoutExpired:
+        console.print(
+            f"  [yellow]⚠[/yellow]  {' '.join(cmd[-2:])}: довше {_CACHE_TIMEOUT} с, пропущено"
+        )
+
+
+def _uv_cache_holders() -> str:
+    """Запущені ``uv run`` (тримають блокування кешу uv), напр. «процес 123 (uv run uvicorn)»."""
+    found = []
+    for cmdline in Path("/proc").glob("[0-9]*/cmdline"):
+        try:
+            argv = cmdline.read_bytes().split(b"\0")
+        except OSError:
+            continue
+        if len(argv) > 2 and argv[0].endswith(b"uv") and argv[1] == b"run":
+            name = argv[2].decode(errors="replace")
+            found.append(f"процес {cmdline.parent.name} (uv run {name})")
+    return ", ".join(sorted(found))
+
+
 def _print_cleanup_summary(removed: list[str], kept: list[str]) -> None:
     """Зведення прибирання під підсумком оновлення: що звільнено і що ще
     тримають (та хто) — його прибере наступний `grunt update`."""
@@ -502,7 +535,12 @@ def _cleanup_runtimes() -> tuple[list[str], list[str]]:
                 kept.append(f"{label} — {who}")
             else:
                 remove([uv_bin, "python", "uninstall", py["key"]], label)
-        subprocess.run([uv_bin, "cache", "prune"], capture_output=True, check=False)
+        if holders := _uv_cache_holders():
+            # prune бере ексклюзивне блокування кешу, а `uv run` (grunt serve)
+            # тримає спільне весь час, поки працює — prune чекав би вічно.
+            kept.append(f"кеш uv — {holders}")
+        else:
+            _quick([uv_bin, "cache", "prune"], {"UV_LOCK_TIMEOUT": "30"})
 
     mise_bin = get_mise_bin()
     if mise_bin:
@@ -529,7 +567,7 @@ def _cleanup_runtimes() -> tuple[list[str], list[str]]:
 
     npm = shutil.which("npm")
     if npm:
-        subprocess.run([npm, "cache", "verify"], capture_output=True, check=False)
+        _quick([npm, "cache", "verify"])
     return removed, kept
 
 
