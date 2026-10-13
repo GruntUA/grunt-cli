@@ -1205,3 +1205,56 @@ class TestUpgradePackages:
 
         assert result.exit_code != 0
         assert "лише в розробці" in result.output
+
+
+class TestAskUpgradePackages:
+    """Розробка: grunt update сам показує новіші пакети й питає про lock-файли."""
+
+    @staticmethod
+    def _run(
+        runner, tmp_path, monkeypatch, *args, outdated=("aiohttp 3.14.4 → 3.14.5",), answer="y"
+    ):
+        bench = tmp_path / "dev"
+        (bench / "apps" / "grunt").mkdir(parents=True)
+        (bench / "sites").mkdir()
+        systemd = tmp_path / "systemd"
+        systemd.mkdir()
+        monkeypatch.setattr("grunt_cli.commands.restart.SYSTEMD_DIR", systemd)
+        monkeypatch.chdir(bench)
+        monkeypatch.setattr("grunt_cli.commands.update._interactive", lambda: True)
+        with (
+            patch("grunt_cli.commands.update._outdated_packages", return_value=list(outdated)),
+            patch("grunt_cli.commands.update._update_python_packages") as packages,
+            patch("grunt_cli.commands.update._run_npm_install"),
+            patch("grunt_cli.commands.update._run_migrations", return_value=True),
+            patch("grunt_cli.commands.update._get_cli_dir", return_value=None),
+            patch("grunt_cli.commands.update._git_pull", return_value=True),
+        ):
+            result = runner.invoke(
+                cli, ["update", "--framework", "--no-deps", *args], input=f"{answer}\n"
+            )
+        return result, packages
+
+    def test_asks_and_upgrades(self, runner, tmp_path, monkeypatch):
+        result, packages = self._run(runner, tmp_path, monkeypatch)
+        assert result.exit_code == 0, result.output
+        assert "aiohttp 3.14.4 → 3.14.5" in result.output
+        packages.assert_called_once_with(upgrade=True)
+
+    def test_declined(self, runner, tmp_path, monkeypatch):
+        result, packages = self._run(runner, tmp_path, monkeypatch, answer="n")
+        assert result.exit_code == 0, result.output
+        packages.assert_called_once_with(upgrade=False)
+
+    def test_nothing_outdated_no_question(self, runner, tmp_path, monkeypatch):
+        result, packages = self._run(runner, tmp_path, monkeypatch, outdated=())
+        assert "найновіших версій" in result.output
+        assert "Оновити uv.lock" not in result.output
+        packages.assert_called_once_with(upgrade=False)
+
+    def test_opt_out(self, runner, tmp_path, monkeypatch):
+        with patch("grunt_cli.commands.update._ask_upgrade_packages") as ask:
+            result, packages = self._run(runner, tmp_path, monkeypatch, "--no-upgrade-packages")
+        assert result.exit_code == 0, result.output
+        ask.assert_not_called()
+        packages.assert_called_once_with(upgrade=False)

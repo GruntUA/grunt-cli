@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import click
 
@@ -447,6 +448,67 @@ def _update_python_packages(upgrade: bool = False) -> None:
         console.print("  [yellow]⚠[/yellow]  Ні uv, ні pip не знайдено")
 
 
+def _outdated_packages() -> list[str]:
+    """Пакети фреймворку, новіші версії яких уже вийшли (PyPI + npm)."""
+    import json  # noqa: PLC0415
+    import shutil  # noqa: PLC0415
+
+    apps_dir = _find_apps_dir()
+    grunt_dir = apps_dir / "grunt" if apps_dir else None
+    if grunt_dir is None or not grunt_dir.is_dir():
+        return []
+
+    def json_of(cmd: list[str], default: str) -> Any:
+        # npm outdated виходить з кодом 1, коли щось застаріло — дивимось лише на JSON
+        try:
+            out = subprocess.run(cmd, cwd=grunt_dir, capture_output=True, text=True).stdout
+            return json.loads(out or default)
+        except (OSError, ValueError):
+            return json.loads(default)
+
+    found: list[str] = []
+    uv_bin = find_uv()
+    python = grunt_dir / ".venv" / "bin" / "python"
+    if uv_bin and python.exists():
+        cmd = [uv_bin, "pip", "list", "--outdated", "--format", "json", "--python", str(python)]
+        found += [
+            f"{p['name']} {p['version']} → {p['latest_version']}"
+            for p in json_of(cmd, "[]")
+            if not p.get("editable_project_location")
+        ]
+    if (grunt_dir / "node_modules").is_dir():
+        mise = get_mise_bin()
+        npm = [mise, "exec", "--", "npm"] if mise else [shutil.which("npm") or "npm"]
+        found += [
+            f"{name} {info['current']} → {info['latest']}"
+            for name, info in json_of([*npm, "outdated", "--json"], "{}").items()
+            if info.get("current") and info.get("current") != info.get("latest")
+        ]
+    return found
+
+
+def _interactive() -> bool:
+    return sys.stdin.isatty()
+
+
+def _ask_upgrade_packages() -> bool:
+    """Розробка: показати новіші версії пакетів і спитати, чи оновити lock-файли."""
+    console.print("  [dim]Перевіряю новіші версії пакетів...[/dim]")
+    outdated = _outdated_packages()
+    if not outdated:
+        console.print("  [green]✓[/green] Пакети — найновіших версій")
+        return False
+    console.print(f"  [yellow]![/yellow] Вийшли новіші версії {len(outdated)} пакетів:")
+    for line in outdated[:15]:
+        console.print(f"    [dim]{line}[/dim]")
+    if len(outdated) > 15:
+        console.print(f"    [dim]… і ще {len(outdated) - 15}[/dim]")
+    if not _interactive():
+        console.print("  [dim]Оновити lock-файли: grunt update --upgrade-packages[/dim]")
+        return False
+    return click.confirm("  Оновити uv.lock і package-lock.json (потім закомітити)?", default=True)
+
+
 def _run_npm_install(app_dir: Path, upgrade: bool = False) -> None:
     """Встановити npm пакети; *upgrade* — ``npm update`` (найновіші в межах
     package.json, з переписаним package-lock.json)."""
@@ -623,6 +685,12 @@ _COMPONENTS = ("cli", "framework", "apps", "deps")
     default=False,
     help="Розробка: оновити uv.lock і package-lock.json до найновіших версій (потім закомітити)",
 )
+@click.option(
+    "--no-upgrade-packages",
+    is_flag=True,
+    default=False,
+    help="Розробка: не перевіряти й не пропонувати новіші версії пакетів",
+)
 @click.option("--skip-packages", is_flag=True, default=False, help="Не оновлювати Python пакети")
 @click.option("--skip-npm", is_flag=True, default=False, help="Не встановлювати npm пакети")
 @click.option("--skip-migrate", is_flag=True, default=False, help="Не запускати міграції БД")
@@ -665,6 +733,7 @@ def update(
     update_apps: bool,
     update_deps: bool,
     upgrade_packages: bool,
+    no_upgrade_packages: bool,
     skip_packages: bool,
     skip_npm: bool,
     skip_migrate: bool,
@@ -711,13 +780,17 @@ def update(
       grunt update --tag            фреймворк і додатки — на найновіші релізи
       grunt update framework --tag v0.2.0   закріпити (або відкотити) версію
       grunt update --branch         голова гілки замість релізів
-      grunt update --upgrade-packages   розробка: найновіші пакети в uv.lock і package-lock.json
+      grunt update --upgrade-packages   розробка: найновіші пакети без питання
 
     \b
     Пакети на проді ставляться рівно за закоміченими lock-файлами: новіші
     версії приходять релізом фреймворку (--upgrade-packages там заборонено —
-    брудне дерево зупинило б наступне оновлення).
+    брудне дерево зупинило б наступне оновлення). У розробці grunt update
+    сам показує новіші версії пакетів і питає, чи оновити lock-файли
+    (без терміналу — лише показує; --no-upgrade-packages — не перевіряти).
     """
+    if upgrade_packages and no_upgrade_packages:
+        raise click.UsageError("--upgrade-packages і --no-upgrade-packages взаємовиключні")
     if tag is not None and follow_branch:
         raise click.UsageError("--tag і --branch взаємовиключні")
     bench = get_bench_dir()
@@ -831,6 +904,13 @@ def update(
         return
 
     # ── 5. Python пакети ────────────────────────────────────────────
+    # У розробці новіші версії пакетів не чекають, доки про них згадають:
+    # grunt update сам показує їх і питає (на проді — лише за lock-файлами).
+    if not (production or upgrade_packages or skip_packages or no_upgrade_packages):
+        console.print("[bold cyan]Новіші пакети[/bold cyan]")
+        upgrade_packages = _ask_upgrade_packages()
+        console.print()
+
     if not skip_packages:
         console.print("[bold cyan]Python пакети[/bold cyan]")
         _update_python_packages(upgrade=upgrade_packages)
