@@ -9,7 +9,7 @@ run = "uv tool install --editable . --force"
 
 [tasks.dev]
 description = "Setup development environment"
-run = "uv sync --all-extras"
+run = "uv sync"
 
 [tasks.test]
 description = "Run tests"
