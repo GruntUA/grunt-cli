@@ -295,9 +295,10 @@ def run_mise(
         cmd.extend(["run"])
     cmd.extend(args)
 
+    # Без MISE_CONFIG_FILE: mise і так бере mise.toml з cwd, а з цією змінною
+    # mise 2026.10+ запускає задачі в $HOME (npm шукав ~/package.json).
     final_env = {**os.environ, **(env or {})}
-    if config_file:
-        final_env["MISE_CONFIG_FILE"] = str(config_file)
+    final_env.pop("MISE_CONFIG_FILE", None)
 
     result = subprocess.run(cmd, cwd=str(cwd), env=final_env)
     return result.returncode == 0
@@ -337,9 +338,10 @@ def run_mise_popen(
         cmd.extend(["run"])
     cmd.extend(args)
 
+    # Без MISE_CONFIG_FILE: mise і так бере mise.toml з cwd, а з цією змінною
+    # mise 2026.10+ запускає задачі в $HOME (npm шукав ~/package.json).
     final_env = {**os.environ, **(env or {})}
-    if config_file:
-        final_env["MISE_CONFIG_FILE"] = str(config_file)
+    final_env.pop("MISE_CONFIG_FILE", None)
 
     kwargs.setdefault("start_new_session", True)
     return subprocess.Popen(cmd, cwd=str(cwd), env=final_env, **kwargs)

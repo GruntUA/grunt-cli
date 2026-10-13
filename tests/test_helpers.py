@@ -146,3 +146,24 @@ class TestGetBenchDir:
     def test_returns_none_when_no_bench(self, tmp_path):
         with patch("grunt_cli.helpers.Path.cwd", return_value=tmp_path):
             assert get_bench_dir() is None
+
+
+def test_mise_tasks_run_in_their_directory(tmp_path, monkeypatch):
+    """MISE_CONFIG_FILE змушує mise 2026.10+ запускати задачі в $HOME — не ставимо його."""
+    from unittest.mock import MagicMock, patch
+
+    from grunt_cli import helpers
+
+    monkeypatch.setenv("MISE_CONFIG_FILE", "/elsewhere/mise.toml")
+    monkeypatch.setattr(helpers, "get_mise_bin", lambda: "/bin/mise")
+    with (
+        patch.object(helpers.subprocess, "run", return_value=MagicMock(returncode=0)) as run,
+        patch.object(helpers.subprocess, "Popen") as popen,
+    ):
+        helpers.run_mise(tmp_path, "build", config_file=tmp_path / "mise.toml")
+        helpers.run_mise_popen(tmp_path, "frontend", config_file=tmp_path / "mise.toml")
+
+    [build] = [c for c in run.call_args_list if "build" in c.args[0]]
+    for call in (build, popen.call_args):
+        assert call.kwargs["cwd"] == str(tmp_path)
+        assert "MISE_CONFIG_FILE" not in call.kwargs["env"]

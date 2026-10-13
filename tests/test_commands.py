@@ -1223,7 +1223,10 @@ class TestAskUpgradePackages:
         monkeypatch.chdir(bench)
         monkeypatch.setattr("grunt_cli.commands.update._interactive", lambda: True)
         with (
-            patch("grunt_cli.commands.update._outdated_packages", return_value=list(outdated)),
+            patch(
+                "grunt_cli.commands.update._outdated_packages",
+                return_value=(list(outdated), ["vitest 4.1.11 → 5.0.4"]),
+            ),
             patch("grunt_cli.commands.update._update_python_packages") as packages,
             patch("grunt_cli.commands.update._run_npm_install"),
             patch("grunt_cli.commands.update._run_migrations", return_value=True),
@@ -1239,6 +1242,7 @@ class TestAskUpgradePackages:
         result, packages = self._run(runner, tmp_path, monkeypatch)
         assert result.exit_code == 0, result.output
         assert "aiohttp 3.14.4 → 3.14.5" in result.output
+        assert "vitest 4.1.11 → 5.0.4" in result.output  # мажорна — лише для довідки
         packages.assert_called_once_with(upgrade=True)
 
     def test_declined(self, runner, tmp_path, monkeypatch):

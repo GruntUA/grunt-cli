@@ -7,7 +7,6 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
 
 import click
 
@@ -422,7 +421,16 @@ def _update_python_packages(upgrade: bool = False) -> None:
             console.print(f"  [yellow]⚠[/yellow]  uv sync {mode} завершився з помилкою")
             return
         apps = subprocess.run(
-            [uv_bin, "run", "python", "-m", FRAMEWORK_CLI_MODULE, "app", "deps"],
+            [
+                uv_bin,
+                "run",
+                "python",
+                "-m",
+                FRAMEWORK_CLI_MODULE,
+                "app",
+                "deps",
+                *(["--upgrade"] if upgrade else []),
+            ],
             cwd=cwd_dir,
             check=False,
             env=env,
@@ -448,43 +456,66 @@ def _update_python_packages(upgrade: bool = False) -> None:
         console.print("  [yellow]⚠[/yellow]  Ні uv, ні pip не знайдено")
 
 
-def _outdated_packages() -> list[str]:
-    """Пакети фреймворку, новіші версії яких уже вийшли (PyPI + npm)."""
+_UV_UPDATE = re.compile(r"^Update (\S+) v(\S+) -> v(\S+)$", re.M)
+
+
+def _outdated_packages() -> tuple[list[str], list[str]]:
+    """``(оновлення, мажорні)`` пакетів фреймворку й додатків.
+
+    Оновлення — те, що візьме --upgrade-packages: ``uv lock --upgrade``
+    (у межах діапазонів, заблоковане чужим піном — ні), пакети лише додатків
+    (``grunt app deps --outdated``) і ``npm update`` (wanted). Мажорні — npm
+    версії поза діапазонами package.json: їх змінюють руками.
+    """
     import json  # noqa: PLC0415
     import shutil  # noqa: PLC0415
 
     apps_dir = _find_apps_dir()
     grunt_dir = apps_dir / "grunt" if apps_dir else None
     if grunt_dir is None or not grunt_dir.is_dir():
-        return []
+        return [], []
 
-    def json_of(cmd: list[str], default: str) -> Any:
+    def output(cmd: list[str]) -> str:
+        try:
+            result = subprocess.run(cmd, cwd=grunt_dir, capture_output=True, text=True)
+        except OSError:
+            return ""
+        return result.stdout + result.stderr
+
+    # uv та npm — версії з mise.toml фреймворку, а не застарілі з PATH оболонки
+    mise = get_mise_bin()
+    via_mise = [mise, "exec", "--"] if mise else []
+    updates: list[str] = []
+    majors: list[str] = []
+    if (grunt_dir / "uv.lock").exists():
+        uv = [*via_mise, "uv"] if mise else [find_uv() or "uv"]
+        plan = output([*uv, "lock", "--upgrade", "--dry-run"])
+        updates += [f"{n} {a} → {b}" for n, a, b in _UV_UPDATE.findall(plan)]
+    python = grunt_dir / ".venv" / "bin" / "python"
+    if python.exists():
+        apps = output([str(python), "-m", FRAMEWORK_CLI_MODULE, "app", "deps", "--outdated"])
+        updates += [line.strip() for line in apps.splitlines() if " → " in line]
+    if (grunt_dir / "node_modules").is_dir():
+        npm = [*via_mise, "npm"] if mise else [shutil.which("npm") or "npm"]
         # npm outdated виходить з кодом 1, коли щось застаріло — дивимось лише на JSON
         try:
-            out = subprocess.run(cmd, cwd=grunt_dir, capture_output=True, text=True).stdout
-            return json.loads(out or default)
+            outdated = json.loads(
+                subprocess.run(
+                    [*npm, "outdated", "--json"], cwd=grunt_dir, capture_output=True, text=True
+                ).stdout
+                or "{}"
+            )
         except (OSError, ValueError):
-            return json.loads(default)
-
-    found: list[str] = []
-    uv_bin = find_uv()
-    python = grunt_dir / ".venv" / "bin" / "python"
-    if uv_bin and python.exists():
-        cmd = [uv_bin, "pip", "list", "--outdated", "--format", "json", "--python", str(python)]
-        found += [
-            f"{p['name']} {p['version']} → {p['latest_version']}"
-            for p in json_of(cmd, "[]")
-            if not p.get("editable_project_location")
-        ]
-    if (grunt_dir / "node_modules").is_dir():
-        mise = get_mise_bin()
-        npm = [mise, "exec", "--", "npm"] if mise else [shutil.which("npm") or "npm"]
-        found += [
-            f"{name} {info['current']} → {info['latest']}"
-            for name, info in json_of([*npm, "outdated", "--json"], "{}").items()
-            if info.get("current") and info.get("current") != info.get("latest")
-        ]
-    return found
+            outdated = {}
+        for name, info in outdated.items():
+            current, wanted, latest = info.get("current"), info.get("wanted"), info.get("latest")
+            if not current:
+                continue
+            if wanted and wanted != current:
+                updates.append(f"{name} {current} → {wanted}")
+            if latest and latest != (wanted or current):
+                majors.append(f"{name} {wanted or current} → {latest}")
+    return updates, majors
 
 
 def _interactive() -> bool:
@@ -494,9 +525,14 @@ def _interactive() -> bool:
 def _ask_upgrade_packages() -> bool:
     """Розробка: показати новіші версії пакетів і спитати, чи оновити lock-файли."""
     console.print("  [dim]Перевіряю новіші версії пакетів...[/dim]")
-    outdated = _outdated_packages()
+    outdated, majors = _outdated_packages()
+    if majors:
+        console.print(
+            f"  [dim]Поза діапазонами package.json ({len(majors)}, міняти вручну):"
+            f" {', '.join(majors)}[/dim]"
+        )
     if not outdated:
-        console.print("  [green]✓[/green] Пакети — найновіших версій")
+        console.print("  [green]✓[/green] Пакети — найновіших версій, які дозволяють діапазони")
         return False
     console.print(f"  [yellow]![/yellow] Вийшли новіші версії {len(outdated)} пакетів:")
     for line in outdated[:15]:
