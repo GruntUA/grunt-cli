@@ -382,12 +382,12 @@ def _update_runtimes() -> None:
         _step([str(_MANAGED_RCLONE), "selfupdate"], "rclone оновлено", quiet=True)
 
 
-def _in_use() -> dict[str, str]:
-    """``{реальний шлях: хто ним користується}`` для інтерпретаторів, на які
+def _in_use() -> dict[str, list[str]]:
+    """``{реальний шлях: [хто ним користується]}`` для інтерпретаторів, на які
     щось спирається: ``home`` кожного venv у домашній теці (фреймворк, додатки,
     uv tool, свої) і виконувані файли запущених процесів (сервер на старому
     Python ще працює, доки його не перезапустили)."""
-    used: dict[str, str] = {}
+    used: dict[str, list[str]] = {}
     home = Path.home()
     skip = {"node_modules", ".cache", ".git", ".npm", "site-packages", "dist"}
     for root, dirs, files in os.walk(home):
@@ -400,7 +400,9 @@ def _in_use() -> dict[str, str]:
             for line in (Path(root) / "pyvenv.cfg").read_text().splitlines():
                 key, _, value = line.partition("=")
                 if key.strip() == "home" and value.strip():
-                    used.setdefault(os.path.realpath(value.strip()), _venv_user(Path(root)))
+                    used.setdefault(os.path.realpath(value.strip()), []).append(
+                        _venv_user(Path(root))
+                    )
         except OSError:
             continue
     for exe in Path("/proc").glob("[0-9]*/exe"):
@@ -408,7 +410,7 @@ def _in_use() -> dict[str, str]:
             path = os.path.realpath(exe)
         except OSError:
             continue
-        used.setdefault(path, _process_user(exe.parent))
+        used.setdefault(path, []).append(_process_user(exe.parent))
     return used
 
 
@@ -425,7 +427,15 @@ def _venv_user(venv: Path) -> str:
             "~/" + str(venv.parent.relative_to(home)) if venv.is_relative_to(home) else venv.parent
         )
         return f"venv {shown} → cd {project} && uv sync --python {py}"
-    return f"venv {shown} → створіть заново: uv venv --python {py} {shown}"
+    # Окремий venv без проєкту: пакети не описані ніде, крім нього самого —
+    # зберегти їх список, перестворити, поставити назад.
+    reqs = f"/tmp/{venv.name.lstrip('.') or 'venv'}-requirements.txt"
+    fix = (
+        f"uv pip freeze --python {shown} > {reqs}"
+        f" && uv venv --clear --python {py} {shown}"
+        f" && uv pip install --python {shown} -r {reqs}"
+    )
+    return f"venv {shown} → {fix}"
 
 
 def _process_user(proc: Path) -> str:
@@ -511,12 +521,17 @@ def _print_cleanup_summary(removed: list[str], kept: list[str], notes: list[str]
         console.print(f"  [dim]Видалено старі рантайми: {', '.join(removed)}[/dim]")
     if kept:
         console.print("  [yellow]Залишено старі рантайми (ще використовуються):[/yellow]")
+        # Рядок на кожного користувача; спільну назву рантайму — один раз.
+        shown = None
         for line in kept:
             label, _, user = line.partition(" — ")
             who, _, fix = user.partition(" → ")
-            console.print(f"    {label} [dim]— {who}[/dim]")
+            if label != shown:
+                console.print(f"    {label}")
+                shown = label
+            console.print(f"      [dim]— {who}[/dim]")
             if fix:
-                console.print(f"      [dim]звільнити:[/dim] [cyan]{fix}[/cyan]")
+                console.print(f"        [dim]звільнити:[/dim] [cyan]{fix}[/cyan]")
         console.print("  [dim]Наступний grunt update прибере їх, щойно вони звільняться.[/dim]")
     for note in notes:
         console.print(f"  [dim]{note}[/dim]")
@@ -536,9 +551,11 @@ def _current_pythons() -> set[Path]:
     return found
 
 
-def _user_of(used: dict[str, str], directory: Path) -> str | None:
+def _users_of(used: dict[str, list[str]], directory: Path) -> list[str]:
+    """Усі, хто користується чимось у *directory* — один Python можуть
+    тримати кілька venv і процесів одночасно."""
     prefix = f"{directory}/"
-    return next((who for path, who in used.items() if path.startswith(prefix)), None)
+    return [w for path, who in used.items() if path.startswith(prefix) for w in who]
 
 
 _MISE_PRUNABLE = re.compile(r"^mise (\S+?)@(\S+) is prunable", re.M)
@@ -595,8 +612,8 @@ def _cleanup_runtimes() -> tuple[list[str], list[str], list[str]]:
             label = f"Python {py.get('version') or py['key']} (uv)"
             if install_dir in current:
                 continue
-            if who := _user_of(used, install_dir):
-                kept.append(f"{label} — {who}")
+            if users := _users_of(used, install_dir):
+                kept.extend(f"{label} — {who}" for who in users)
             else:
                 remove([uv_bin, "python", "uninstall", py["key"]], label)
         if holders := _uv_cache_holders():
@@ -624,8 +641,8 @@ def _cleanup_runtimes() -> tuple[list[str], list[str], list[str]]:
             installs = Path.home() / ".local" / "share" / "mise" / "installs"
             for tool, version in _MISE_PRUNABLE.findall(plan.stdout + plan.stderr):
                 label = f"{tool} {version} (mise)"
-                if who := _user_of(used, installs / tool / version):
-                    kept.append(f"{label} — {who}")
+                if users := _users_of(used, installs / tool / version):
+                    kept.extend(f"{label} — {who}" for who in users)
                 else:
                     remove([mise_bin, "uninstall", f"{tool}@{version}"], label)
 

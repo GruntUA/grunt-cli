@@ -1313,7 +1313,7 @@ class TestCleanup:
         ] + [{"key": "cpython-3.13.5-linux-x86_64-gnu", "version": "3.13.5", "path": "/usr/bin/x"}]
         real_in_use = update._in_use
         # 3.14.8 тримає запущений процес (сервер ще не перезапущено)
-        held = {f"{managed}/cpython-3.14.8-linux-x86_64-gnu/bin/python3": "процес 42 (uvicorn)"}
+        held = {f"{managed}/cpython-3.14.8-linux-x86_64-gnu/bin/python3": ["процес 42 (uvicorn)"]}
         monkeypatch.setattr(update, "_in_use", lambda: {**real_in_use(), **held})
         monkeypatch.setattr(update, "find_uv", lambda: "/bin/uv")
         monkeypatch.setattr(update, "get_mise_bin", lambda: None)
@@ -1347,7 +1347,7 @@ class TestCleanup:
             "mise node@26.8.1 is prunable: node is required at 26.11.1\n"
             "mise uv@0.11.7 is prunable: uv is required at 0.13.0\n"
         )
-        monkeypatch.setattr(update, "_in_use", lambda: {str(node): "процес 7 (node)"})
+        monkeypatch.setattr(update, "_in_use", lambda: {str(node): ["процес 7 (node)"]})
         monkeypatch.setattr(update, "find_uv", lambda: None)
         monkeypatch.setattr(update, "get_mise_bin", lambda: "/bin/mise")
         monkeypatch.setattr(update, "_runtime_dir", lambda: grunt_dir)
@@ -1409,7 +1409,10 @@ class TestCleanup:
         "grunt_cli.commands.update._cleanup_runtimes",
         return_value=(
             ["uv 0.11.7 (mise)"],
-            ["Python 3.14.4 (uv) — процес 42 (grunt serve, 6 дн) → kill 42"],
+            [
+                "Python 3.14.4 (uv) — процес 42 (grunt serve, 6 дн) → kill 42",
+                "Python 3.14.4 (uv) — uv tool deptry → uv tool install --reinstall deptry",
+            ],
             [],
         ),
     )
@@ -1421,8 +1424,11 @@ class TestCleanup:
         cleanup.assert_called_once()
         tail = result.output.split("Оновлення завершено", 1)[1]
         assert "Видалено старі рантайми: uv 0.11.7 (mise)" in tail
-        assert "Python 3.14.4 (uv) — процес 42 (grunt serve, 6 дн)" in tail
-        assert "звільнити: kill 42" in tail
+        # назва рантайму — один раз, під нею кожен, хто його тримає
+        assert tail.count("Python 3.14.4 (uv)") == 1
+        assert "— процес 42 (grunt serve, 6 дн)" in tail and "звільнити: kill 42" in tail
+        assert "— uv tool deptry" in tail
+        assert "звільнити: uv tool install --reinstall deptry" in tail
 
         cleanup.reset_mock()
         assert runner.invoke(cli, ["update", "--keep-old", "--no-upgrade-packages"]).exit_code == 0
