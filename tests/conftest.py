@@ -11,7 +11,7 @@ def _no_real_cleanup(request, monkeypatch):
     never against the real machine from a test (TestCleanup opts in)."""
     if request.node.get_closest_marker("real_cleanup"):
         return
-    monkeypatch.setattr("grunt_cli.commands.update._cleanup_runtimes", lambda: None)
+    monkeypatch.setattr("grunt_cli.commands.update._cleanup_runtimes", lambda: ([], []))
 
 
 def pytest_configure(config):

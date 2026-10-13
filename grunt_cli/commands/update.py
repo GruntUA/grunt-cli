@@ -381,11 +381,12 @@ def _update_runtimes() -> None:
         _step([str(_MANAGED_RCLONE), "selfupdate"], "rclone оновлено", quiet=True)
 
 
-def _in_use_paths() -> set[str]:
-    """Реальні шляхи інтерпретаторів, на які щось спирається: ``home`` кожного
-    venv у домашній теці (venv-и фреймворку, додатків, uv tool, свої) та
-    виконувані файли запущених процесів (сервер на старому Python ще працює)."""
-    used: set[str] = set()
+def _in_use() -> dict[str, str]:
+    """``{реальний шлях: хто ним користується}`` для інтерпретаторів, на які
+    щось спирається: ``home`` кожного venv у домашній теці (фреймворк, додатки,
+    uv tool, свої) і виконувані файли запущених процесів (сервер на старому
+    Python ще працює, доки його не перезапустили)."""
+    used: dict[str, str] = {}
     home = Path.home()
     skip = {"node_modules", ".cache", ".git", ".npm", "site-packages", "dist"}
     for root, dirs, files in os.walk(home):
@@ -398,31 +399,81 @@ def _in_use_paths() -> set[str]:
             for line in (Path(root) / "pyvenv.cfg").read_text().splitlines():
                 key, _, value = line.partition("=")
                 if key.strip() == "home" and value.strip():
-                    used.add(os.path.realpath(value.strip()))
+                    venv = "~/" + str(Path(root).relative_to(home))
+                    used.setdefault(os.path.realpath(value.strip()), f"venv {venv}")
         except OSError:
             continue
     for exe in Path("/proc").glob("[0-9]*/exe"):
         try:
-            used.add(os.path.realpath(exe))
+            path = os.path.realpath(exe)
+            name = (exe.parent / "comm").read_text().strip()
         except OSError:
             continue
+        used.setdefault(path, f"процес {exe.parent.name} ({name})")
     return used
 
 
-def _cleanup_runtimes() -> None:
+def _print_cleanup_summary(removed: list[str], kept: list[str]) -> None:
+    """Зведення прибирання під підсумком оновлення: що звільнено і що ще
+    тримають (та хто) — його прибере наступний `grunt update`."""
+    if removed:
+        console.print(f"  [dim]Видалено старі рантайми: {', '.join(removed)}[/dim]")
+    if kept:
+        console.print("  [yellow]Залишено старі рантайми (ще використовуються):[/yellow]")
+        for line in kept:
+            console.print(f"    [dim]{line}[/dim]")
+        console.print(
+            "  [dim]Наступний grunt update прибере їх, щойно вони звільняться"
+            " (перезапустіть процес або оновіть venv).[/dim]"
+        )
+
+
+def _current_pythons() -> set[Path]:
+    """Теки Python, на яких працюють фреймворк (його .venv) і сам grunt-cli —
+    вони поточні, а не «старі», навіть коли вільні."""
+    found = {Path(os.path.realpath(sys.executable)).parent.parent}
+    apps_dir = _find_apps_dir()
+    cfg = apps_dir / "grunt" / ".venv" / "pyvenv.cfg" if apps_dir else None
+    if cfg and cfg.is_file():
+        for line in cfg.read_text().splitlines():
+            key, _, value = line.partition("=")
+            if key.strip() == "home" and value.strip():
+                found.add(Path(os.path.realpath(value.strip())).parent)
+    return found
+
+
+def _user_of(used: dict[str, str], directory: Path) -> str | None:
+    prefix = f"{directory}/"
+    return next((who for path, who in used.items() if path.startswith(prefix)), None)
+
+
+_MISE_PRUNABLE = re.compile(r"^mise (\S+?)@(\S+) is prunable", re.M)
+
+
+def _cleanup_runtimes() -> tuple[list[str], list[str]]:
     """Прибрати рантайми, які оновлення залишило без діла.
+
+    Повертає ``(видалено, залишено)`` — рядки для зведення наприкінці.
 
     \b
     uv python   версії, на які не вказує жоден venv і не працює жоден процес
-    mise prune  старі версії інструментів mise.toml (node, uv, python) —
-                лише їх: rclone та інше, поставлене mise вручну, не чіпаємо
+    mise        старі версії інструментів mise.toml (node, uv, python), так само
+                лише вільні; rclone та інше, поставлене mise вручну, не чіпаємо
     uv cache prune, npm cache verify — невикористане з кешів
     """
     import json  # noqa: PLC0415
     import shutil  # noqa: PLC0415
     import tomllib  # noqa: PLC0415
 
-    used = _in_use_paths()
+    used = _in_use()
+    removed: list[str] = []
+    kept: list[str] = []
+
+    def remove(cmd: list[str], label: str) -> None:
+        if _step(cmd, f"Видалено {label}", quiet=True):
+            removed.append(label)
+        else:
+            kept.append(f"{label} — не вдалося видалити")
 
     uv_bin = find_uv()
     if uv_bin:
@@ -436,17 +487,21 @@ def _cleanup_runtimes() -> None:
         except ValueError:
             installs = []
         managed = Path.home() / ".local" / "share" / "uv" / "python"
-        unused: dict[str, str] = {}
+        current = _current_pythons()
+        seen: set[str] = set()
         for py in installs:
             path = os.path.realpath(py.get("path") or "")
-            if not path.startswith(f"{managed}/"):
-                continue  # системний Python
-            install_dir = path.removeprefix(f"{managed}/").split("/", 1)[0]
-            in_use = any(u.startswith(f"{managed}/{install_dir}/") for u in used)
-            if not in_use:
-                unused[py["key"]] = py.get("version") or py["key"]
-        for key, version in sorted(unused.items()):
-            _step([uv_bin, "python", "uninstall", key], f"Видалено Python {version}", quiet=True)
+            if not path.startswith(f"{managed}/") or py["key"] in seen:
+                continue  # системний Python; minor-посилання дублює версію
+            seen.add(py["key"])
+            install_dir = managed / path.removeprefix(f"{managed}/").split("/", 1)[0]
+            label = f"Python {py.get('version') or py['key']} (uv)"
+            if install_dir in current:
+                continue
+            if who := _user_of(used, install_dir):
+                kept.append(f"{label} — {who}")
+            else:
+                remove([uv_bin, "python", "uninstall", py["key"]], label)
         subprocess.run([uv_bin, "cache", "prune"], capture_output=True, check=False)
 
     mise_bin = get_mise_bin()
@@ -458,21 +513,24 @@ def _cleanup_runtimes() -> None:
             if cfg and cfg.is_file():
                 with cfg.open("rb") as f:
                     tools.update(tomllib.load(f).get("tools", {}))
-        installs = Path.home() / ".local" / "share" / "mise" / "installs"
-        running = sorted(
-            name for name in tools if any(u.startswith(f"{installs}/{name}/") for u in used)
-        )
-        if running:
-            # Старий node/python може тримати запущений процес — його версію
-            # не знаємо напевно, тож ці інструменти чистимо наступного разу.
-            console.print(f"  [dim]Зараз використовуються, не чищу: {', '.join(running)}[/dim]")
-        prune = sorted(tools - set(running))
-        if prune:
-            _step([mise_bin, "prune", "--yes", *prune], "Старі версії mise прибрано", quiet=True)
+        if tools:
+            plan = subprocess.run(
+                [mise_bin, "prune", "--dry-run", *sorted(tools)],
+                capture_output=True,
+                text=True,
+            )
+            installs = Path.home() / ".local" / "share" / "mise" / "installs"
+            for tool, version in _MISE_PRUNABLE.findall(plan.stdout + plan.stderr):
+                label = f"{tool} {version} (mise)"
+                if who := _user_of(used, installs / tool / version):
+                    kept.append(f"{label} — {who}")
+                else:
+                    remove([mise_bin, "uninstall", f"{tool}@{version}"], label)
 
     npm = shutil.which("npm")
     if npm:
         subprocess.run([npm, "cache", "verify"], capture_output=True, check=False)
+    return removed, kept
 
 
 def _update_python_packages(upgrade: bool = False) -> None:
@@ -1084,9 +1142,13 @@ def update(
     # ── 9. Прибирання ───────────────────────────────────────────────
     # Після перезапуску: старий Python може бути потрібен сервісам, доки вони
     # не стартували на новому.
+    removed: list[str] = []
+    kept: list[str] = []
     if (update_all or update_deps) and not keep_old:
         console.print("[bold cyan]Прибирання[/bold cyan]")
-        _cleanup_runtimes()
+        removed, kept = _cleanup_runtimes()
+        if not removed and not kept:
+            console.print("  [green]✓[/green] Старих версій рантаймів немає")
         console.print()
 
     # ── Фінал ───────────────────────────────────────────────────────
@@ -1094,6 +1156,7 @@ def update(
         console.print("[yellow]Нічого не оновлено[/yellow]")
     elif restarted:
         console.print("[bold green]✅ Оновлення завершено[/bold green]")
+        _print_cleanup_summary(removed, kept)
     else:
         console.print("[bold red]✗ Оновлення завершено з помилками[/bold red]")
         raise SystemExit(1)
