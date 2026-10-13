@@ -1074,15 +1074,17 @@ def update(
 
     \b
     Послідовність:
-      1. git fetch + rebase для CLI, фреймворку та додатків
+      1. git fetch + rebase для CLI
       2. mise self-update, mise install + upgrade (Node.js, uv у межах mise.toml),
-         uv python upgrade (патч Python), rclone selfupdate
-      3. uv sync --locked --inexact + grunt app deps (клонує відсутні додатки з
+         uv python upgrade (патч Python), rclone selfupdate — до залежностей
+         фреймворку, щоб venv створював уже новий uv
+      3. git fetch + rebase для фреймворку та додатків (+ mise run deps)
+      4. uv sync --locked --inexact + grunt app deps (клонує відсутні додатки з
          depends_on, ставить Python пакети фреймворку й додатків)
-      4. npm install
-      5. grunt migrate (Alembic + DocType-таблиці + fixtures)
-      6. прод (є systemd-сервіси): mise run build + перезапуск сервісів
-      7. прибирання: невикористані версії Python (uv) і mise-інструментів,
+      5. npm install
+      6. grunt migrate (Alembic + DocType-таблиці + fixtures)
+      7. прод (є systemd-сервіси): mise run build + перезапуск сервісів
+      8. прибирання: невикористані версії Python (uv) і mise-інструментів,
          кеші uv/npm (--keep-old — не чистити)
 
     \b
@@ -1165,7 +1167,17 @@ def update(
             updated_something = True
         console.print()
 
-    # ── 2. Framework ────────────────────────────────────────────────
+    # ── 2. Системні залежності (рантайми) ────────────────────────
+    # До `mise run deps` фреймворку й додатків: інакше venv перестворить ще
+    # старий uv, який не знає новішого Python (поставив би 3.15.0rc2 замість
+    # 3.15.0), а `uv python upgrade` після нього вже нічого не змінить.
+    if update_all or update_deps:
+        console.print("[bold cyan]Системні залежності[/bold cyan]")
+        _update_runtimes()
+        updated_something = True
+        console.print()
+
+    # ── 3. Framework ────────────────────────────────────────────────
     # Задача фреймворку `deps` уже робить `npm install` — крок 6 тоді не дублює його.
     framework_deps_done = False
     if update_all or update_framework:
@@ -1189,7 +1201,7 @@ def update(
             updated_something = True
         console.print()
 
-    # ── 3. Apps ─────────────────────────────────────────────────────
+    # ── 4. Apps ─────────────────────────────────────────────────────
     if update_all or update_apps:
         console.print("[bold cyan]Додатки[/bold cyan]")
         apps_dir = _find_apps_dir()
@@ -1218,13 +1230,6 @@ def update(
                     if not no_deps:
                         _install_deps(app_dir, app_dir.name)
                     updated_something = True
-        console.print()
-
-    # ── 4. Системні залежності (рантайми) ────────────────────────
-    if update_all or update_deps:
-        console.print("[bold cyan]Системні залежності[/bold cyan]")
-        _update_runtimes()
-        updated_something = True
         console.print()
 
     if cli_only:

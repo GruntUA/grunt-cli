@@ -567,6 +567,31 @@ class TestUpdate:
         assert "Grunt framework не знайдено" in result.output
         assert "Директорію додатків не знайдено" in result.output
 
+    @patch("grunt_cli.commands.update._restart_production", return_value=True)
+    @patch("grunt_cli.commands.update._run_migrations", return_value=True)
+    @patch("grunt_cli.commands.update._run_npm_install")
+    @patch("grunt_cli.commands.update._update_python_packages")
+    @patch("grunt_cli.commands.update._update_repo")
+    @patch("grunt_cli.commands.update._get_cli_dir", return_value=None)
+    def test_runtimes_before_framework_deps(
+        self, _cli, _repo, _packages, _npm, _migrate, _restart, runner, tmp_path, monkeypatch
+    ):
+        # Інакше `mise run deps` перестворює venv ще старим uv, який не знає
+        # новішого Python (3.15.0rc2 замість 3.15.0).
+        from grunt_cli.commands import update
+
+        (tmp_path / "apps" / "grunt").mkdir(parents=True)
+        monkeypatch.setattr(update, "_find_apps_dir", lambda: tmp_path / "apps")
+        order = []
+        monkeypatch.setattr(update, "_update_runtimes", lambda: order.append("runtimes"))
+        monkeypatch.setattr(
+            update, "_install_deps", lambda path, label: order.append(f"deps {label}") or True
+        )
+
+        result = runner.invoke(cli, ["update"])
+        assert result.exit_code == 0, result.output
+        assert order == ["runtimes", "deps grunt"]
+
     @patch("grunt_cli.commands.update.subprocess.run")
     @patch("grunt_cli.commands.update._get_cli_dir")
     @patch("grunt_cli.commands.update._find_apps_dir", return_value=None)
