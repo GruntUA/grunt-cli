@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 from rich.console import Console
+from rich.markup import escape
 
 console = Console()
 
@@ -17,6 +19,68 @@ DEFAULT_API = "http://localhost:8000"
 NODE_LTS_VERSION = "22.14.0"
 
 _LOCAL_HOSTS = {"localhost", "127.0.0.1"}
+
+# `grunt update -v`: показувати повний вивід підпроцесів замість стислого.
+VERBOSE = False
+
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# structlog-рядок: "<час> [warning  ] event.name   [logger] key=value ..."
+_LOG_LINE = re.compile(r"\[\s*(warning|error|critical)\s*\]\s+(\S+)\s+(?:\[[^\]]*\]\s*)?(.*)")
+# Попередження, які щоразу однакові й нічого не означають для оновлення.
+_NOISE_EVENTS = {"tasks.broker_initialized"}
+_FAIL_TAIL = 25
+
+
+def _notable(output: str) -> list[str]:
+    """warning/error рядки structlog зі стислого виводу, без дублікатів."""
+    seen: list[str] = []
+    for raw in output.splitlines():
+        m = _LOG_LINE.search(_ANSI.sub("", raw))
+        if not m or m.group(2) in _NOISE_EVENTS:
+            continue
+        mark = "[yellow]⚠[/yellow]" if m.group(1) == "warning" else "[red]✗[/red]"
+        line = f"    {mark} {escape(m.group(2))} [dim]{escape(m.group(3).strip())}[/dim]"
+        if line not in seen:
+            seen.append(line)
+    return seen
+
+
+def run_captured(
+    cmd: list[str],
+    *,
+    cwd: str | Path | None = None,
+    env: dict[str, str] | None = None,
+    status: str = "",
+) -> int:
+    """Запускає команду без потоку її виводу в термінал; повертає exit code.
+
+    Успіх — показує лише warning/error рядки логів. Помилка — хвіст виводу,
+    щоб було видно причину. З ``VERBOSE`` — звичайний наскрізний вивід.
+    """
+    cwd_str = str(cwd) if cwd else None
+    if VERBOSE:
+        return subprocess.run(cmd, cwd=cwd_str, env=env, check=False).returncode
+
+    with console.status(f"[dim]{status}[/dim]" if status else "", spinner="dots"):
+        result = subprocess.run(
+            cmd,
+            cwd=cwd_str,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            errors="replace",
+            check=False,
+        )
+    output = result.stdout or ""
+    if result.returncode != 0:
+        lines = [_ANSI.sub("", ln) for ln in output.rstrip().splitlines()][-_FAIL_TAIL:]
+        for ln in lines:
+            console.print("    " + ln, style="dim", markup=False, highlight=False)
+    else:
+        for line in _notable(output)[:15]:
+            console.print(line, highlight=False)
+    return result.returncode
 
 
 # ---------------------------------------------------------------------------
@@ -159,10 +223,12 @@ def get_current_site_name() -> str | None:
     return site_dir.name if site_dir is not None else None
 
 
-def venv_delegate(*args: str, site: str | None = None) -> int:
+def venv_delegate(
+    *args: str, site: str | None = None, quiet: bool = False, status: str = ""
+) -> int:
     """Делегує команду до backend venv grunt CLI і повертає exit code.
 
-    Виводить output прямо в термінал (не захоплює).
+    Виводить output прямо в термінал; з *quiet* — лише попередження/помилки.
     Повертає -1 якщо backend CLI не знайдено.
     """
     grunt_bin = get_venv_grunt()
@@ -181,6 +247,8 @@ def venv_delegate(*args: str, site: str | None = None) -> int:
     if site_name:
         cmd.extend(["--site", site_name])
 
+    if quiet:
+        return run_captured(cmd, cwd=grunt_dir or os.getcwd(), env=env, status=status)
     result = subprocess.run(cmd, cwd=grunt_dir or os.getcwd(), env=env)
     return result.returncode
 
@@ -263,9 +331,17 @@ def get_mise_bin() -> str | None:
 
 
 def run_mise(
-    cwd: Path, *args: str, env: dict[str, str] | None = None, config_file: Path | None = None
+    cwd: Path,
+    *args: str,
+    env: dict[str, str] | None = None,
+    config_file: Path | None = None,
+    quiet: bool = False,
+    status: str = "",
 ) -> bool:
-    """Виконує команду mise у вказаній директорії (блокує)."""
+    """Виконує команду mise у вказаній директорії (блокує).
+
+    *quiet* — вивід не в термінал, лише попередження/помилки (див. ``run_captured``).
+    """
     mise_bin = get_mise_bin()
     if not mise_bin:
         console.print("[red]✗[/red] [bold]mise[/bold] не знайдено. Встановіть його для роботи.")
@@ -300,6 +376,8 @@ def run_mise(
     final_env = {**os.environ, **(env or {})}
     final_env.pop("MISE_CONFIG_FILE", None)
 
+    if quiet:
+        return run_captured(cmd, cwd=cwd, env=final_env, status=status) == 0
     result = subprocess.run(cmd, cwd=str(cwd), env=final_env)
     return result.returncode == 0
 

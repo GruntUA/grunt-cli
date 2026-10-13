@@ -11,6 +11,7 @@ from pathlib import Path
 
 import click
 
+from grunt_cli import helpers
 from grunt_cli.commands.restart import installed_units, restart_units
 from grunt_cli.helpers import (
     FRAMEWORK_CLI_MODULE,
@@ -22,6 +23,7 @@ from grunt_cli.helpers import (
     get_mise_bin,
     get_site_dir,
     github_repo_path,
+    run_captured,
     run_mise,
     venv_delegate,
 )
@@ -295,8 +297,7 @@ def _warn_stale_lock(label: str) -> None:
 
 def _install_deps(path: Path, label: str) -> bool:
     """Встановлює залежності через mise; True, якщо відпрацювала задача ``deps``."""
-    console.print(f"  [dim]Оновлюю рантайми для {label}...[/dim]")
-    run_mise(path, "install")
+    run_mise(path, "install", quiet=True, status=f"Оновлюю рантайми для {label}...")
 
     mise_toml = path / "mise.toml"
     if mise_toml.exists():
@@ -305,13 +306,19 @@ def _install_deps(path: Path, label: str) -> bool:
         with mise_toml.open("rb") as f:
             tasks = tomllib.load(f).get("tasks", {})
         if "deps" in tasks:
-            console.print(f"  [dim]Встановлюю пакети для {label} (mise run deps)...[/dim]")
             # deps-задача сама викликає npm install — із застарілим lock вона б упала.
             env = None
             if _package_lock_stale(path):
                 _warn_stale_lock(label)
                 env = _NPM_NO_LOCK_ENV
-            return bool(run_mise(path, "run", "deps", env=env))
+            status = f"Встановлюю пакети для {label} (mise run deps)..."
+            if run_mise(path, "run", "deps", env=env, quiet=True, status=status):
+                console.print(f"  [green]✓[/green] Пакети {label} встановлені")
+                return True
+            console.print(
+                f"  [yellow]⚠[/yellow]  Пакети {label}: mise run deps завершився з помилкою"
+            )
+            return False
     return False
 
 
@@ -387,8 +394,10 @@ def _update_runtimes() -> None:
         if runtime_dir is None:
             console.print("  [dim]mise.toml не знайдено[/dim]")
         else:
-            console.print("  [dim]Оновлюю рантайми з mise.toml (Node.js, uv тощо)...[/dim]")
-            if run_mise(runtime_dir, "install") and run_mise(runtime_dir, "upgrade"):
+            status = "Оновлюю рантайми з mise.toml (Node.js, uv тощо)..."
+            if run_mise(runtime_dir, "install", quiet=True, status=status) and run_mise(
+                runtime_dir, "upgrade", quiet=True, status=status
+            ):
                 console.print("  [green]✓[/green] Рантайми з mise.toml оновлені")
             else:
                 console.print("  [yellow]⚠[/yellow]  Оновлення рантаймів завершилось з помилкою")
@@ -396,7 +405,6 @@ def _update_runtimes() -> None:
     # uv міг щойно оновитися через mise — шукаємо його після.
     uv_bin = _project_uv()
     if uv_bin:
-        console.print("  [dim]Оновлюю Python (uv python upgrade)...[/dim]")
         _step([uv_bin, "python", "upgrade"], "Python оновлено", quiet=True)
 
     if os.access(_MANAGED_RCLONE, os.X_OK):
@@ -698,24 +706,29 @@ def _update_python_packages(upgrade: bool = False) -> None:
         # зупинить наступне оновлення. Без lock (старий фреймворк) — --upgrade.
         locked = bool(cwd_dir) and (Path(cwd_dir) / "uv.lock").exists()
         mode = "--locked" if locked else "--upgrade"
-        if locked and upgrade:
-            console.print("  [dim]Оновлюю uv.lock (uv lock --upgrade)...[/dim]")
-            if subprocess.run([uv_bin, "lock", "--upgrade"], cwd=cwd_dir, env=env).returncode:
-                console.print("  [yellow]⚠[/yellow]  uv lock --upgrade завершився з помилкою")
-                return
-        console.print(f"  [dim]Оновлюю Python пакети (uv sync {mode})...[/dim]")
+        if (
+            locked
+            and upgrade
+            and run_captured(
+                [uv_bin, "lock", "--upgrade"],
+                cwd=cwd_dir,
+                env=env,
+                status="Оновлюю uv.lock (uv lock --upgrade)...",
+            )
+        ):
+            console.print("  [yellow]⚠[/yellow]  uv lock --upgrade завершився з помилкою")
+            return
         # --inexact: keep packages outside the framework's lock — the apps
         # (editable) and their dependencies, installed by `grunt app deps`.
-        result = subprocess.run(
+        if run_captured(
             [uv_bin, "sync", mode, "--all-extras", "--inexact"],
             cwd=cwd_dir,
-            check=False,
             env=env,
-        )
-        if result.returncode != 0:
+            status=f"Оновлюю Python пакети (uv sync {mode})...",
+        ):
             console.print(f"  [yellow]⚠[/yellow]  uv sync {mode} завершився з помилкою")
             return
-        apps = subprocess.run(
+        apps = run_captured(
             [
                 uv_bin,
                 "run",
@@ -727,10 +740,10 @@ def _update_python_packages(upgrade: bool = False) -> None:
                 *(["--upgrade"] if upgrade else []),
             ],
             cwd=cwd_dir,
-            check=False,
             env=env,
+            status="Встановлюю залежності додатків (grunt app deps)...",
         )
-        if apps.returncode != 0:
+        if apps != 0:
             console.print(
                 "  [yellow]⚠[/yellow]  Залежності додатків не встановились (grunt app deps)"
             )
@@ -856,14 +869,14 @@ def _run_npm_install(app_dir: Path, upgrade: bool = False) -> None:
         npm_run = [npm]
 
     if upgrade:
-        console.print(f"  [dim]Оновлюю npm пакети ({app_dir.name}, npm update)...[/dim]")
-        if subprocess.run([*npm_run, "update"], cwd=str(app_dir), check=False).returncode == 0:
+        status = f"Оновлюю npm пакети ({app_dir.name}, npm update)..."
+        if run_captured([*npm_run, "update"], cwd=app_dir, status=status) == 0:
             console.print("  [green]✓[/green] npm пакети оновлені (package-lock.json змінено)")
             return
         console.print("  [yellow]⚠[/yellow]  npm update завершився з помилкою")
         return
 
-    console.print(f"  [dim]Встановлюю npm пакети ({app_dir.name})...[/dim]")
+    status = f"Встановлюю npm пакети ({app_dir.name})..."
     no_lock = [*npm_run, "install", "--no-package-lock"]
 
     if _package_lock_stale(app_dir):
@@ -871,15 +884,15 @@ def _run_npm_install(app_dir: Path, upgrade: bool = False) -> None:
         # одразу розв'язуємо за package.json.
         _warn_stale_lock(app_dir.name)
     else:
-        result = subprocess.run([*npm_run, "install"], cwd=str(app_dir), check=False)
+        result = run_captured([*npm_run, "install"], cwd=app_dir, status=status)
         # Без `npm audit fix`: він переписує закомічений package-lock.json фреймворку,
         # і наступний git pull конфліктує. Версії пакетів приходять лише з lock-файла.
-        if result.returncode == 0:
+        if result == 0:
             console.print("  [green]✓[/green] npm пакети встановлені")
             return
         console.print("  [dim]Повторна спроба без package-lock.json...[/dim]")
 
-    if subprocess.run(no_lock, cwd=str(app_dir), check=False).returncode == 0:
+    if run_captured(no_lock, cwd=app_dir, status=status) == 0:
         console.print("  [green]✓[/green] npm пакети встановлені (без package-lock.json)")
         return
 
@@ -891,7 +904,7 @@ def _run_npm_install(app_dir: Path, upgrade: bool = False) -> None:
         console.print("  [dim]Чиста установка node_modules, повторна спроба...[/dim]")
         shutil.rmtree(backup, ignore_errors=True)
         nm.rename(backup)
-        if subprocess.run(no_lock, cwd=str(app_dir), check=False).returncode == 0:
+        if run_captured(no_lock, cwd=app_dir, status=status) == 0:
             shutil.rmtree(backup, ignore_errors=True)
             console.print("  [green]✓[/green] npm пакети встановлені (чиста установка)")
             return
@@ -910,7 +923,7 @@ def _run_migrations(site: str | None) -> bool:
     if get_current_site() is None:
         console.print("  [yellow]⚠[/yellow]  grunt.site не знайдено")
         return False
-    code = venv_delegate("migrate", site=site)
+    code = venv_delegate("migrate", site=site, quiet=True, status="Застосовую міграції...")
     if code == -1:
         console.print("  [yellow]⚠[/yellow]  Backend venv не знайдено (apps/grunt/.venv)")
         return False
@@ -942,10 +955,12 @@ def _restart_production(migrated: bool) -> bool:
         )
         return False
 
-    console.print("  [dim]Збираю фронтенд (mise run build)...[/dim]")
-    if not run_mise(bench / "apps" / "grunt", "build"):
+    if not run_mise(
+        bench / "apps" / "grunt", "build", quiet=True, status="Збираю фронтенд (mise run build)..."
+    ):
         console.print("  [yellow]⚠[/yellow]  Збірка фронтенду не вдалася — сервіси НЕ перезапущено")
         return False
+    console.print("  [green]✓[/green] Фронтенд зібрано")
     return restart_units(units)
 
 
@@ -1051,6 +1066,9 @@ _COMPONENTS = ("cli", "framework", "apps", "deps")
     help="Відкотити реліз, навіть якщо в базі вже є його міграції (після відновлення бекапу)",
 )
 @click.option("--site", default=None, help="Назва сайту (для migrate)")
+@click.option(
+    "-v", "--verbose", is_flag=True, help="Повний вивід uv/mise/npm/міграцій замість стислого"
+)
 def update(
     component: str | None,
     update_cli: bool,
@@ -1069,6 +1087,7 @@ def update(
     follow_branch: bool,
     force: bool,
     site: str | None,
+    verbose: bool,
 ) -> None:
     """Оновити CLI, фреймворк, додатки, пакети та схему БД.
 
@@ -1111,6 +1130,7 @@ def update(
       grunt update framework --tag v0.2.0   закріпити (або відкотити) версію
       grunt update --branch         голова гілки замість релізів
       grunt update --upgrade-packages   розробка: найновіші пакети без питання
+      grunt update -v               повний вивід підпроцесів (для діагностики)
 
     \b
     Пакети на проді ставляться рівно за закоміченими lock-файлами: новіші
@@ -1119,6 +1139,7 @@ def update(
     сам показує новіші версії пакетів і питає, чи оновити lock-файли
     (без терміналу — лише показує; --no-upgrade-packages — не перевіряти).
     """
+    helpers.VERBOSE = verbose
     if upgrade_packages and no_upgrade_packages:
         raise click.UsageError("--upgrade-packages і --no-upgrade-packages взаємовиключні")
     if tag is not None and follow_branch:
@@ -1161,9 +1182,13 @@ def update(
             if not no_deps:
                 # editable-встановлення підхоплює код і так, а нові залежності
                 # CLI ставить лише перевстановлення (mise-задача install).
-                console.print("  [dim]Встановлюю grunt-cli (mise run install)...[/dim]")
-                run_mise(cli_dir, "install")
-                run_mise(cli_dir, "run", "install")
+                status = "Встановлюю grunt-cli (mise run install)..."
+                if run_mise(cli_dir, "install", quiet=True, status=status) and run_mise(
+                    cli_dir, "run", "install", quiet=True, status=status
+                ):
+                    console.print("  [green]✓[/green] grunt-cli встановлено")
+                else:
+                    console.print("  [yellow]⚠[/yellow]  Встановлення grunt-cli не вдалося")
             updated_something = True
         console.print()
 

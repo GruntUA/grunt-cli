@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -637,7 +638,7 @@ class TestUpdate:
 
         assert result.exit_code == 0, result.output
         assert "grunt-cli оновлено" in result.output
-        mock_mise.assert_any_call(cli_dir, "run", "install")
+        assert (cli_dir, "run", "install") in [c.args for c in mock_mise.call_args_list]
         mock_packages.assert_not_called()
         mock_npm.assert_not_called()
         mock_migrate.assert_not_called()
@@ -681,7 +682,7 @@ class TestUpdateRestart:
         )
         result = self._run(runner)
         assert result.exit_code == 0, result.output
-        mock_mise.assert_any_call(bench / "apps" / "grunt", "build")
+        assert (bench / "apps" / "grunt", "build") in [c.args for c in mock_mise.call_args_list]
         mock_restart.assert_called_once_with(["mlt_prod-web.service", "mlt_prod-worker.service"])
 
     @patch("grunt_cli.commands.update.restart_units")
@@ -723,7 +724,9 @@ class TestUpdateRestart:
         site.mkdir()
         monkeypatch.setattr("grunt_cli.commands.update.get_current_site", lambda: site)
         assert _run_migrations(None) is True
-        mock_delegate.assert_called_once_with("migrate", site=None)
+        mock_delegate.assert_called_once()
+        assert mock_delegate.call_args.args == ("migrate",)
+        assert mock_delegate.call_args.kwargs["site"] is None
 
 
 # ── grunt master ───────────────────────────────────────────────
@@ -1186,8 +1189,8 @@ class TestRuntimes:
         assert ["/usr/bin/mise", "self-update", "--yes"] in commands
         assert ["/usr/bin/uv", "python", "upgrade"] in commands
         assert [str(rclone), "selfupdate"] in commands
-        mock_run_mise.assert_any_call(grunt_dir, "install")
-        mock_run_mise.assert_any_call(grunt_dir, "upgrade")
+        assert (grunt_dir, "install") in [c.args for c in mock_run_mise.call_args_list]
+        assert (grunt_dir, "upgrade") in [c.args for c in mock_run_mise.call_args_list]
 
     @patch("grunt_cli.commands.update.find_uv", return_value=None)
     @patch("grunt_cli.commands.update.get_mise_bin", return_value=None)
@@ -1525,3 +1528,38 @@ class TestCleanup:
         cleanup.reset_mock()
         assert runner.invoke(cli, ["update", "--keep-old", "--no-upgrade-packages"]).exit_code == 0
         cleanup.assert_not_called()
+
+
+class TestQuietOutput:
+    """`grunt update` hides subprocess chatter, keeping warnings and failure tails."""
+
+    def test_success_shows_only_warnings(self, capsys):
+        from grunt_cli import helpers
+
+        script = (
+            "print('Resolved 129 packages'); "
+            "print('2026-10-13T12:48:08Z [info     ] registry.core_injected [x] name=User'); "
+            "print('2026-10-13T12:48:08Z [warning  ] tasks.broker_initialized [x] reason=r'); "
+            "print('2026-10-13T12:48:08Z [warning  ] registry.core_permissions_drifted "
+            "[grunt.metadata.registry] name=Comment')"
+        )
+        assert helpers.run_captured([sys.executable, "-c", script]) == 0
+        out = capsys.readouterr().out
+        assert "Resolved" not in out
+        assert "core_injected" not in out
+        assert "broker_initialized" not in out
+        assert "registry.core_permissions_drifted" in out and "name=Comment" in out
+
+    def test_failure_shows_output_tail(self, capsys):
+        from grunt_cli import helpers
+
+        script = "import sys; print('boom: lock is stale'); sys.exit(3)"
+        assert helpers.run_captured([sys.executable, "-c", script]) == 3
+        assert "boom: lock is stale" in capsys.readouterr().out
+
+    def test_verbose_passes_output_through(self, monkeypatch, capfd):
+        from grunt_cli import helpers
+
+        monkeypatch.setattr(helpers, "VERBOSE", True)
+        assert helpers.run_captured([sys.executable, "-c", "print('Resolved 129')"]) == 0
+        assert "Resolved 129" in capfd.readouterr().out
