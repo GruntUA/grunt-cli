@@ -1262,3 +1262,120 @@ class TestAskUpgradePackages:
         assert result.exit_code == 0, result.output
         ask.assert_not_called()
         packages.assert_called_once_with(upgrade=False)
+
+
+@pytest.mark.real_cleanup
+class TestCleanup:
+    """Після оновлення прибираються лише рантайми, на які ніщо не спирається."""
+
+    @staticmethod
+    def _home(tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        managed = home / ".local/share/uv/python"
+        for name in (
+            "cpython-3.14.4-linux-x86_64-gnu",
+            "cpython-3.14.8-linux-x86_64-gnu",
+            "cpython-3.15.0-linux-x86_64-gnu",
+        ):
+            (managed / name / "bin").mkdir(parents=True)
+            (managed / name / "bin" / "python3").write_text("")
+        # minor-посилання, як робить uv: 3.15 → 3.15.0
+        (managed / "cpython-3.15-linux-x86_64-gnu").symlink_to(
+            managed / "cpython-3.15.0-linux-x86_64-gnu"
+        )
+        venv = home / "my-site/apps/grunt/.venv"
+        venv.mkdir(parents=True)
+        (venv / "pyvenv.cfg").write_text(
+            f"home = {managed}/cpython-3.15-linux-x86_64-gnu/bin\nversion_info = 3.15\n"
+        )
+        # venv у node_modules не рахується (туди не заходимо)
+        nm = home / "my-site/apps/grunt/node_modules/x/.venv"
+        nm.mkdir(parents=True)
+        (nm / "pyvenv.cfg").write_text(f"home = {managed}/cpython-3.14.4-linux-x86_64-gnu/bin\n")
+        monkeypatch.setattr("grunt_cli.commands.update.Path.home", lambda: home)
+        return home, managed
+
+    def test_uninstalls_only_unused_python(self, tmp_path, monkeypatch):
+        import json
+
+        from grunt_cli.commands import update
+
+        home, managed = self._home(tmp_path, monkeypatch)
+        listed = [
+            {
+                "key": f"cpython-{v}-linux-x86_64-gnu",
+                "version": v,
+                "path": f"{managed}/cpython-{v}-linux-x86_64-gnu/bin/python3",
+            }
+            for v in ("3.14.4", "3.14.8", "3.15.0")
+        ] + [
+            {
+                "key": "cpython-3.13.5-linux-x86_64-gnu",
+                "version": "3.13.5",
+                "path": "/usr/bin/python3",
+            }
+        ]
+        # 3.14.8 тримає запущений процес (сервер ще не перезапущено)
+        running = {f"{managed}/cpython-3.14.8-linux-x86_64-gnu/bin/python3"}
+        real_paths = update._in_use_paths
+
+        monkeypatch.setattr(update, "_in_use_paths", lambda: real_paths() | running)
+        monkeypatch.setattr(update, "find_uv", lambda: "/bin/uv")
+        monkeypatch.setattr(update, "get_mise_bin", lambda: None)
+        monkeypatch.setattr("shutil.which", lambda name: None)
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return MagicMock(returncode=0, stdout=json.dumps(listed) if "list" in cmd else "")
+
+        monkeypatch.setattr(update.subprocess, "run", fake_run)
+        update._cleanup_runtimes()
+
+        uninstalled = [c[-1] for c in calls if c[1:3] == ["python", "uninstall"]]
+        assert uninstalled == ["cpython-3.14.4-linux-x86_64-gnu"]
+        assert ["/bin/uv", "cache", "prune"] in calls
+
+    def test_mise_prunes_only_its_tools_not_running(self, tmp_path, monkeypatch):
+        from grunt_cli.commands import update
+
+        home, _managed = self._home(tmp_path, monkeypatch)
+        grunt_dir = home / "my-site/apps/grunt"
+        (grunt_dir / "mise.toml").write_text('[tools]\nnode = "26"\nuv = "latest"\n')
+        cli_dir = home / "grunt-cli"
+        cli_dir.mkdir()
+        (cli_dir / "mise.toml").write_text('[tools]\npython = "3.15"\nnode = "24"\n')
+        running_node = str(home / ".local/share/mise/installs/node/26.8.1/bin/node")
+
+        monkeypatch.setattr(update, "_in_use_paths", lambda: {running_node})
+        monkeypatch.setattr(update, "find_uv", lambda: None)
+        monkeypatch.setattr(update, "get_mise_bin", lambda: "/bin/mise")
+        monkeypatch.setattr(update, "_runtime_dir", lambda: grunt_dir)
+        monkeypatch.setattr(update, "_get_cli_dir", lambda: cli_dir)
+        monkeypatch.setattr("shutil.which", lambda name: None)
+        calls = []
+        monkeypatch.setattr(
+            update.subprocess,
+            "run",
+            lambda cmd, **kw: calls.append(cmd) or MagicMock(returncode=0, stdout=""),
+        )
+        update._cleanup_runtimes()
+
+        # node тримає процес; rclone та інше поза mise.toml — не згадується
+        assert calls == [["/bin/mise", "prune", "--yes", "python", "uv"]]
+
+    @patch("grunt_cli.commands.update._update_python_packages")
+    @patch("grunt_cli.commands.update._run_npm_install")
+    @patch("grunt_cli.commands.update._update_runtimes")
+    @patch("grunt_cli.commands.update._run_migrations", return_value=True)
+    @patch("grunt_cli.commands.update._get_cli_dir", return_value=None)
+    @patch("grunt_cli.commands.update._find_apps_dir", return_value=None)
+    @patch("grunt_cli.commands.update._cleanup_runtimes")
+    def test_runs_last_and_keep_old_skips(
+        self, cleanup, _apps, _cli, _migrate, _runtimes, _npm, _packages, runner
+    ):
+        assert runner.invoke(cli, ["update", "--no-upgrade-packages"]).exit_code == 0
+        cleanup.assert_called_once()
+        cleanup.reset_mock()
+        assert runner.invoke(cli, ["update", "--keep-old", "--no-upgrade-packages"]).exit_code == 0
+        cleanup.assert_not_called()

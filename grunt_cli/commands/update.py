@@ -381,6 +381,100 @@ def _update_runtimes() -> None:
         _step([str(_MANAGED_RCLONE), "selfupdate"], "rclone оновлено", quiet=True)
 
 
+def _in_use_paths() -> set[str]:
+    """Реальні шляхи інтерпретаторів, на які щось спирається: ``home`` кожного
+    venv у домашній теці (venv-и фреймворку, додатків, uv tool, свої) та
+    виконувані файли запущених процесів (сервер на старому Python ще працює)."""
+    used: set[str] = set()
+    home = Path.home()
+    skip = {"node_modules", ".cache", ".git", ".npm", "site-packages", "dist"}
+    for root, dirs, files in os.walk(home):
+        depth = len(Path(root).relative_to(home).parts)
+        # не заходимо в кеші/залежності; venv лежить не глибше ~/a/b/c/d/.venv
+        dirs[:] = [d for d in dirs if d not in skip and depth < 6]
+        if "pyvenv.cfg" not in files:
+            continue
+        try:
+            for line in (Path(root) / "pyvenv.cfg").read_text().splitlines():
+                key, _, value = line.partition("=")
+                if key.strip() == "home" and value.strip():
+                    used.add(os.path.realpath(value.strip()))
+        except OSError:
+            continue
+    for exe in Path("/proc").glob("[0-9]*/exe"):
+        try:
+            used.add(os.path.realpath(exe))
+        except OSError:
+            continue
+    return used
+
+
+def _cleanup_runtimes() -> None:
+    """Прибрати рантайми, які оновлення залишило без діла.
+
+    \b
+    uv python   версії, на які не вказує жоден venv і не працює жоден процес
+    mise prune  старі версії інструментів mise.toml (node, uv, python) —
+                лише їх: rclone та інше, поставлене mise вручну, не чіпаємо
+    uv cache prune, npm cache verify — невикористане з кешів
+    """
+    import json  # noqa: PLC0415
+    import shutil  # noqa: PLC0415
+    import tomllib  # noqa: PLC0415
+
+    used = _in_use_paths()
+
+    uv_bin = find_uv()
+    if uv_bin:
+        listed = subprocess.run(
+            [uv_bin, "python", "list", "--only-installed", "--output-format", "json"],
+            capture_output=True,
+            text=True,
+        ).stdout
+        try:
+            installs = json.loads(listed or "[]")
+        except ValueError:
+            installs = []
+        managed = Path.home() / ".local" / "share" / "uv" / "python"
+        unused: dict[str, str] = {}
+        for py in installs:
+            path = os.path.realpath(py.get("path") or "")
+            if not path.startswith(f"{managed}/"):
+                continue  # системний Python
+            install_dir = path.removeprefix(f"{managed}/").split("/", 1)[0]
+            in_use = any(u.startswith(f"{managed}/{install_dir}/") for u in used)
+            if not in_use:
+                unused[py["key"]] = py.get("version") or py["key"]
+        for key, version in sorted(unused.items()):
+            _step([uv_bin, "python", "uninstall", key], f"Видалено Python {version}", quiet=True)
+        subprocess.run([uv_bin, "cache", "prune"], capture_output=True, check=False)
+
+    mise_bin = get_mise_bin()
+    if mise_bin:
+        tools: set[str] = set()
+        runtime_dir = _runtime_dir()
+        cli_dir = _get_cli_dir()
+        for cfg in (runtime_dir and runtime_dir / "mise.toml", cli_dir and cli_dir / "mise.toml"):
+            if cfg and cfg.is_file():
+                with cfg.open("rb") as f:
+                    tools.update(tomllib.load(f).get("tools", {}))
+        installs = Path.home() / ".local" / "share" / "mise" / "installs"
+        running = sorted(
+            name for name in tools if any(u.startswith(f"{installs}/{name}/") for u in used)
+        )
+        if running:
+            # Старий node/python може тримати запущений процес — його версію
+            # не знаємо напевно, тож ці інструменти чистимо наступного разу.
+            console.print(f"  [dim]Зараз використовуються, не чищу: {', '.join(running)}[/dim]")
+        prune = sorted(tools - set(running))
+        if prune:
+            _step([mise_bin, "prune", "--yes", *prune], "Старі версії mise прибрано", quiet=True)
+
+    npm = shutil.which("npm")
+    if npm:
+        subprocess.run([npm, "cache", "verify"], capture_output=True, check=False)
+
+
 def _update_python_packages(upgrade: bool = False) -> None:
     """Оновити Python пакети (uv sync --locked за uv.lock, без нього --upgrade; або pip).
 
@@ -672,29 +766,17 @@ def _find_apps_dir() -> Path | None:
 
 def _get_cli_dir() -> Path | None:
     """Повертає директорію grunt-cli (editable install)."""
-    # Спочатку перевіряємо стандартне розташування
+    # Editable-встановлення (uv tool install --editable, як робить bootstrap):
+    # код, що зараз виконується, і є робочою копією репозиторію.
+    import grunt_cli  # noqa: PLC0415
+
+    source = Path(grunt_cli.__file__).resolve().parent.parent
+    if (source / ".git").exists():
+        return source
+
     default_dir = Path.home() / ".grunt-cli"
     if (default_dir / ".git").exists():
         return default_dir
-
-    # Fallback: шукаємо через uv
-    uv_bin = find_uv()
-    if uv_bin:
-        result = subprocess.run(
-            [uv_bin, "pip", "show", "grunt-cli"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            return None
-    else:
-        return None
-
-    for line in result.stdout.splitlines():
-        if line.startswith("Editable project location:"):
-            path = Path(line.split(":", 1)[1].strip())
-            if path.exists():
-                return path
     return None
 
 
@@ -732,6 +814,12 @@ _COMPONENTS = ("cli", "framework", "apps", "deps")
 @click.option("--skip-migrate", is_flag=True, default=False, help="Не запускати міграції БД")
 @click.option(
     "--no-deps", is_flag=True, default=False, help="Не встановлювати залежності після оновлення"
+)
+@click.option(
+    "--keep-old",
+    is_flag=True,
+    default=False,
+    help="Не видаляти старі версії Python/Node.js/uv і не чистити кеші",
 )
 @click.option(
     "--no-restart",
@@ -774,6 +862,7 @@ def update(
     skip_npm: bool,
     skip_migrate: bool,
     no_deps: bool,
+    keep_old: bool,
     no_restart: bool,
     tag: str | None,
     follow_branch: bool,
@@ -792,6 +881,8 @@ def update(
       4. npm install
       5. grunt migrate (Alembic + DocType-таблиці + fixtures)
       6. прод (є systemd-сервіси): mise run build + перезапуск сервісів
+      7. прибирання: невикористані версії Python (uv) і mise-інструментів,
+         кеші uv/npm (--keep-old — не чистити)
 
     \b
     Версії: на проді (є systemd-сервіси) фреймворк і додатки ставляться на
@@ -988,6 +1079,14 @@ def update(
     if updated_something and not no_restart:
         console.print("[bold cyan]Перезапуск[/bold cyan]")
         restarted = _restart_production(migrated)
+        console.print()
+
+    # ── 9. Прибирання ───────────────────────────────────────────────
+    # Після перезапуску: старий Python може бути потрібен сервісам, доки вони
+    # не стартували на новому.
+    if (update_all or update_deps) and not keep_old:
+        console.print("[bold cyan]Прибирання[/bold cyan]")
+        _cleanup_runtimes()
         console.print()
 
     # ── Фінал ───────────────────────────────────────────────────────
