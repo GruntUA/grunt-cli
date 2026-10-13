@@ -353,7 +353,7 @@ def _update_runtimes() -> None:
     mise self-update   сам mise (не вийде, якщо він з пакета ОС — тоді через пакетний менеджер)
     mise upgrade       найновіші версії в межах mise.toml (node = "26" → останній 26.x)
     uv python upgrade  найновіший патч Python; venv дивиться на теку мінорної версії
-                       (cpython-3.14-…), тож підхоплює його без перестворення
+                       (cpython-3.15-…), тож підхоплює його без перестворення
     rclone selfupdate  лише rclone, який завантажив сам фреймворк
     """
     mise_bin = get_mise_bin()

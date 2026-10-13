@@ -20,7 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/GruntUA/grunt-cli/master/bootstrap.
 What it does:
 - installs system packages via apt: **git**, **gnupg**, **sudo**, **Redis**;
 - installs **[mise](https://mise.jdx.dev/)** and adds its activation to `~/.bashrc`;
-- clones grunt-cli into `~/.grunt-cli` and installs it; mise brings **Python 3.14**, **Node.js** and **uv**.
+- clones grunt-cli into `~/.grunt-cli` and installs it; mise brings **Python 3.15**, **Node.js** and **uv**.
 
 It asks whether this is a server — then it also installs **nginx** and sets the time zone.
 Run as **root** on a fresh server, it asks for a user name (default `grunt`), creates that user
@@ -41,7 +41,7 @@ echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.bashrc && exec bash
 
 #### 2. Install Grunt CLI
 
-Clone the repository and use `mise` to set up the environment (Python 3.14, Node.js, uv) and install the CLI globally:
+Clone the repository and use `mise` to set up the environment (Python 3.15, Node.js, uv) and install the CLI globally:
 
 ```bash
 git clone https://github.com/GruntUA/grunt-cli.git
@@ -328,4 +328,4 @@ When working outside a project directory, downloaded apps are cached in `~/.grun
 
 - Ubuntu/Debian for `bootstrap.sh` (it installs everything below); other systems — manual setup
 - Git, Redis, [mise](https://mise.jdx.dev/)
-- Python 3.14, Node.js and uv — installed by mise, no need to install them yourself
+- Python 3.15, Node.js and uv — installed by mise, no need to install them yourself
