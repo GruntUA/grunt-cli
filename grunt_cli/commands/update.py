@@ -347,6 +347,27 @@ def _step(cmd: list[str], label: str, cwd: Path | None = None, quiet: bool = Fal
     return False
 
 
+def _project_uv() -> str | None:
+    """uv, якого вимагає mise.toml фреймворку, — звідки б не запустили grunt update.
+
+    find_uv() дає mise-шим, а шим обирає версію за поточною текою: з кореня
+    бенча він падає «No version is set for shim: uv». ``mise which``
+    у теці mise.toml повертає сам бінарник потрібної версії."""
+    mise_bin = get_mise_bin()
+    runtime_dir = _runtime_dir()
+    if mise_bin and runtime_dir:
+        result = subprocess.run(
+            [mise_bin, "which", "uv"],
+            cwd=str(runtime_dir),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0 and (path := result.stdout.strip()):
+            return path
+    return find_uv()
+
+
 def _update_runtimes() -> None:
     """Оновити mise, рантайми з mise.toml (Node.js, uv), Python і rclone.
 
@@ -373,7 +394,7 @@ def _update_runtimes() -> None:
                 console.print("  [yellow]⚠[/yellow]  Оновлення рантаймів завершилось з помилкою")
 
     # uv міг щойно оновитися через mise — шукаємо його після.
-    uv_bin = find_uv()
+    uv_bin = _project_uv()
     if uv_bin:
         console.print("  [dim]Оновлюю Python (uv python upgrade)...[/dim]")
         _step([uv_bin, "python", "upgrade"], "Python оновлено", quiet=True)
@@ -589,15 +610,18 @@ def _cleanup_runtimes() -> tuple[list[str], list[str], list[str]]:
         else:
             kept.append(f"{label} — не вдалося видалити")
 
-    uv_bin = find_uv()
+    uv_bin = _project_uv()
     if uv_bin:
         listed = subprocess.run(
             [uv_bin, "python", "list", "--only-installed", "--output-format", "json"],
             capture_output=True,
             text=True,
-        ).stdout
+        )
+        if listed.returncode:
+            error = (listed.stderr or "").strip().splitlines() or [f"код {listed.returncode}"]
+            notes.append(f"Python (uv) не чищено — uv python list: {error[-1]}")
         try:
-            installs = json.loads(listed or "[]")
+            installs = json.loads(listed.stdout or "[]") if not listed.returncode else []
         except ValueError:
             installs = []
         managed = Path.home() / ".local" / "share" / "uv" / "python"

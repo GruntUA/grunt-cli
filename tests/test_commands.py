@@ -1152,6 +1152,8 @@ class TestRuntimes:
         rclone.chmod(0o755)
         monkeypatch.setattr(update, "get_bench_dir", lambda: tmp_path)
         monkeypatch.setattr(update, "_MANAGED_RCLONE", rclone)
+        # `mise which uv` нічого не дав — запасний find_uv()
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
 
         update._update_runtimes()
 
@@ -1171,6 +1173,45 @@ class TestRuntimes:
         monkeypatch.setattr(update, "_MANAGED_RCLONE", tmp_path / "missing")
         update._update_runtimes()
         mock_run.assert_not_called()
+
+
+class TestProjectUv:
+    """uv для проєкту — з mise.toml фреймворку, навіть коли grunt update
+    запущено з кореня бенча, де mise-шим uv не знає версії."""
+
+    def test_mise_which_in_runtime_dir(self, tmp_path, monkeypatch):
+        from grunt_cli.commands import update
+
+        uv = "/home/u/.local/share/mise/installs/uv/0.13.0/uv"
+        monkeypatch.setattr(update, "get_mise_bin", lambda: "/bin/mise")
+        monkeypatch.setattr(update, "_runtime_dir", lambda: tmp_path)
+        monkeypatch.setattr(update, "find_uv", lambda: "/shims/uv")
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append((cmd, kwargs.get("cwd")))
+            return MagicMock(returncode=0, stdout=f"{uv}\n")
+
+        monkeypatch.setattr(update.subprocess, "run", fake_run)
+        assert update._project_uv() == uv
+        assert calls == [(["/bin/mise", "which", "uv"], str(tmp_path))]
+
+    @pytest.mark.parametrize(
+        ("mise", "runtime", "result"),
+        [
+            ("/bin/mise", True, MagicMock(returncode=1, stdout="")),
+            ("/bin/mise", False, None),
+            (None, True, None),
+        ],
+    )
+    def test_falls_back_to_find_uv(self, tmp_path, monkeypatch, mise, runtime, result):
+        from grunt_cli.commands import update
+
+        monkeypatch.setattr(update, "get_mise_bin", lambda: mise)
+        monkeypatch.setattr(update, "_runtime_dir", lambda: tmp_path if runtime else None)
+        monkeypatch.setattr(update, "find_uv", lambda: "/shims/uv")
+        monkeypatch.setattr(update.subprocess, "run", lambda cmd, **kw: result)
+        assert update._project_uv() == "/shims/uv"
 
 
 class TestUpgradePackages:
@@ -1362,7 +1403,7 @@ class TestCleanup:
         removed, kept, _notes = update._cleanup_runtimes()
 
         # лише інструменти з mise.toml — rclone та інше не згадується
-        assert calls[0] == ["/bin/mise", "prune", "--dry-run", "node", "python", "uv"]
+        assert ["/bin/mise", "prune", "--dry-run", "node", "python", "uv"] in calls
         assert ["/bin/mise", "uninstall", "uv@0.11.7"] in calls
         assert ["/bin/mise", "uninstall", "node@26.8.1"] not in calls
         assert removed == ["uv 0.11.7 (mise)"]
@@ -1386,6 +1427,32 @@ class TestCleanup:
         assert ["/bin/uv", "cache", "prune"] not in calls
         assert notes == ["Кеш uv не чищено — його тримає процес 5 (uv run uvicorn)"]
         assert kept == []
+
+    def test_failed_python_list_is_reported(self, tmp_path, monkeypatch):
+        from grunt_cli.commands import update
+
+        self._home(tmp_path, monkeypatch)
+        monkeypatch.setattr(update, "_in_use", dict)
+        monkeypatch.setattr(update, "find_uv", lambda: "/shims/uv")
+        monkeypatch.setattr(update, "get_mise_bin", lambda: None)
+        monkeypatch.setattr(update, "_uv_cache_holders", lambda: "")
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if "list" in cmd:
+                return MagicMock(
+                    returncode=1, stdout="", stderr="mise ERROR No version is set for shim: uv\n"
+                )
+            return MagicMock(returncode=0, stdout="")
+
+        monkeypatch.setattr(update.subprocess, "run", fake_run)
+        removed, kept, notes = update._cleanup_runtimes()
+        assert not [c for c in calls if c[1:3] == ["python", "uninstall"]]
+        assert (removed, kept) == ([], [])
+        assert notes == [
+            "Python (uv) не чищено — uv python list: mise ERROR No version is set for shim: uv"
+        ]
 
     def test_slow_cache_cleanup_is_skipped(self, monkeypatch):
         import subprocess as sp
