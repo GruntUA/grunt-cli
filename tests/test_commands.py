@@ -1132,3 +1132,76 @@ class TestPythonPackages:
 
         sync = mock_run.call_args_list[0].args[0]
         assert sync[:3] == ["/usr/bin/uv", "sync", mode]
+
+
+class TestRuntimes:
+    """grunt update оновлює mise, рантайми з mise.toml, Python і rclone фреймворку."""
+
+    @patch("grunt_cli.commands.update.run_mise", return_value=True)
+    @patch("grunt_cli.commands.update.find_uv", return_value="/usr/bin/uv")
+    @patch("grunt_cli.commands.update.get_mise_bin", return_value="/usr/bin/mise")
+    @patch("grunt_cli.commands.update.subprocess.run", return_value=MagicMock(returncode=0))
+    def test_upgrades_everything(self, mock_run, _mise, _uv, mock_run_mise, tmp_path, monkeypatch):
+        from grunt_cli.commands import update
+
+        grunt_dir = tmp_path / "apps" / "grunt"
+        grunt_dir.mkdir(parents=True)
+        (grunt_dir / "mise.toml").write_text("[tools]\n")
+        rclone = tmp_path / "rclone"
+        rclone.write_text("")
+        rclone.chmod(0o755)
+        monkeypatch.setattr(update, "get_bench_dir", lambda: tmp_path)
+        monkeypatch.setattr(update, "_MANAGED_RCLONE", rclone)
+
+        update._update_runtimes()
+
+        commands = [c.args[0] for c in mock_run.call_args_list]
+        assert ["/usr/bin/mise", "self-update", "--yes"] in commands
+        assert ["/usr/bin/uv", "python", "upgrade"] in commands
+        assert [str(rclone), "selfupdate"] in commands
+        mock_run_mise.assert_any_call(grunt_dir, "install")
+        mock_run_mise.assert_any_call(grunt_dir, "upgrade")
+
+    @patch("grunt_cli.commands.update.find_uv", return_value=None)
+    @patch("grunt_cli.commands.update.get_mise_bin", return_value=None)
+    @patch("grunt_cli.commands.update.subprocess.run")
+    def test_no_rclone_of_our_own(self, mock_run, _mise, _uv, tmp_path, monkeypatch):
+        from grunt_cli.commands import update
+
+        monkeypatch.setattr(update, "_MANAGED_RCLONE", tmp_path / "missing")
+        update._update_runtimes()
+        mock_run.assert_not_called()
+
+
+class TestUpgradePackages:
+    @patch("grunt_cli.commands.update.find_uv", return_value="/usr/bin/uv")
+    @patch("grunt_cli.commands.update.subprocess.run", return_value=MagicMock(returncode=0))
+    def test_relocks_before_sync(self, mock_run, _uv, tmp_path, monkeypatch):
+        from grunt_cli.commands.update import _update_python_packages
+
+        (tmp_path / "apps" / "grunt").mkdir(parents=True)
+        (tmp_path / "apps" / "grunt" / "uv.lock").write_text("")
+        monkeypatch.setattr("grunt_cli.commands.update._find_apps_dir", lambda: tmp_path / "apps")
+
+        _update_python_packages(upgrade=True)
+
+        commands = [c.args[0][:3] for c in mock_run.call_args_list]
+        assert commands[:2] == [
+            ["/usr/bin/uv", "lock", "--upgrade"],
+            ["/usr/bin/uv", "sync", "--locked"],
+        ]
+
+    def test_refused_in_production(self, runner, tmp_path, monkeypatch):
+        bench = tmp_path / "prod"
+        (bench / "apps" / "grunt").mkdir(parents=True)
+        (bench / "sites").mkdir()
+        systemd = tmp_path / "systemd"
+        systemd.mkdir()
+        (systemd / "prod-web.service").write_text("")
+        monkeypatch.setattr("grunt_cli.commands.restart.SYSTEMD_DIR", systemd)
+        monkeypatch.chdir(bench)
+
+        result = runner.invoke(cli, ["update", "--upgrade-packages"])
+
+        assert result.exit_code != 0
+        assert "лише в розробці" in result.output

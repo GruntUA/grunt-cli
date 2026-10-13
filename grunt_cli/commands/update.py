@@ -18,6 +18,7 @@ from grunt_cli.helpers import (
     find_uv,
     get_bench_dir,
     get_current_site,
+    get_mise_bin,
     get_site_dir,
     github_repo_path,
     run_mise,
@@ -313,42 +314,79 @@ def _install_deps(path: Path, label: str) -> bool:
     return False
 
 
-def _update_runtimes() -> None:
-    """Оновити системні рантайми (Python, Node.js тощо) через mise."""
-    import shutil  # noqa: PLC0415
+# rclone, який фреймворк сам завантажує, коли на сервері його немає
+# (grunt.storage.cloud.rclone.INSTALL_DIR).
+_MANAGED_RCLONE = (
+    Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "grunt/bin/rclone"
+)
 
-    # Спочатку шукаємо mise у поточному середовищі
-    mise_bin = shutil.which("mise")
-    if not mise_bin:
-        console.print("  [yellow]⚠[/yellow]  mise не знайдено, пропускаю оновлення рантаймів")
-        return
 
+def _runtime_dir() -> Path | None:
+    """Директорія з mise.toml, де описані рантайми проєкту."""
     bench = get_bench_dir()
-    if bench:
-        config_file = bench / "apps" / "grunt" / "mise.toml"
-        if config_file.exists():
-            console.print("  [dim]Оновлюю системні рантайми (Python, Node.js тощо)...[/dim]")
-            result = subprocess.run([mise_bin, "install"], cwd=str(bench), check=False)
-            if result.returncode == 0:
-                console.print("  [green]✓[/green] Системні рантайми оновлені")
-            else:
-                console.print("  [yellow]⚠[/yellow]  Оновлення рантаймів завершилось з помилкою")
-            return
-
+    if bench and (bench / "apps" / "grunt" / "mise.toml").exists():
+        return bench / "apps" / "grunt"
     site = get_site_dir()
     if site and (site / "mise.toml").exists():
-        console.print("  [dim]Оновлюю системні рантайми (Python, Node.js тощо)...[/dim]")
-        result = subprocess.run([mise_bin, "install"], cwd=str(site), check=False)
-        if result.returncode == 0:
-            console.print("  [green]✓[/green] Системні рантайми оновлені")
-        else:
-            console.print("  [yellow]⚠[/yellow]  Оновлення рантаймів завершилось з помилкою")
+        return site
+    return None
+
+
+def _step(cmd: list[str], label: str, cwd: Path | None = None, quiet: bool = False) -> bool:
+    """Один крок оновлення рантаймів: ✓ або ⚠ з останнім рядком помилки."""
+    result = subprocess.run(
+        cmd, cwd=str(cwd) if cwd else None, capture_output=quiet, text=True, check=False
+    )
+    if result.returncode == 0:
+        console.print(f"  [green]✓[/green] {label}")
+        return True
+    console.print(f"  [yellow]⚠[/yellow]  {label}: завершилось з помилкою")
+    if quiet and (lines := (result.stderr or result.stdout).strip().splitlines()):
+        console.print(f"    [dim]{lines[-1]}[/dim]")
+    return False
+
+
+def _update_runtimes() -> None:
+    """Оновити mise, рантайми з mise.toml (Node.js, uv), Python і rclone.
+
+    \b
+    mise self-update   сам mise (не вийде, якщо він з пакета ОС — тоді через пакетний менеджер)
+    mise upgrade       найновіші версії в межах mise.toml (node = "26" → останній 26.x)
+    uv python upgrade  найновіший патч Python; venv дивиться на теку мінорної версії
+                       (cpython-3.14-…), тож підхоплює його без перестворення
+    rclone selfupdate  лише rclone, який завантажив сам фреймворк
+    """
+    mise_bin = get_mise_bin()
+    if not mise_bin:
+        console.print("  [yellow]⚠[/yellow]  mise не знайдено, пропускаю оновлення рантаймів")
     else:
-        console.print("  [dim]mise.toml не знайдено[/dim]")
+        _step([mise_bin, "self-update", "--yes"], "mise оновлено", quiet=True)
+        runtime_dir = _runtime_dir()
+        if runtime_dir is None:
+            console.print("  [dim]mise.toml не знайдено[/dim]")
+        else:
+            console.print("  [dim]Оновлюю рантайми з mise.toml (Node.js, uv тощо)...[/dim]")
+            if run_mise(runtime_dir, "install") and run_mise(runtime_dir, "upgrade"):
+                console.print("  [green]✓[/green] Рантайми з mise.toml оновлені")
+            else:
+                console.print("  [yellow]⚠[/yellow]  Оновлення рантаймів завершилось з помилкою")
+
+    # uv міг щойно оновитися через mise — шукаємо його після.
+    uv_bin = find_uv()
+    if uv_bin:
+        console.print("  [dim]Оновлюю Python (uv python upgrade)...[/dim]")
+        _step([uv_bin, "python", "upgrade"], "Python оновлено", quiet=True)
+
+    if os.access(_MANAGED_RCLONE, os.X_OK):
+        _step([str(_MANAGED_RCLONE), "selfupdate"], "rclone оновлено", quiet=True)
 
 
-def _update_python_packages() -> None:
-    """Оновити Python пакети (uv sync --locked за uv.lock, без нього --upgrade; або pip)."""
+def _update_python_packages(upgrade: bool = False) -> None:
+    """Оновити Python пакети (uv sync --locked за uv.lock, без нього --upgrade; або pip).
+
+    *upgrade* (розробка): спершу ``uv lock --upgrade`` — найновіші версії в
+    uv.lock, який потім треба закомітити.
+    """
     import os  # noqa: PLC0415
     import shutil  # noqa: PLC0415
 
@@ -365,6 +403,11 @@ def _update_python_packages() -> None:
         # зупинить наступне оновлення. Без lock (старий фреймворк) — --upgrade.
         locked = bool(cwd_dir) and (Path(cwd_dir) / "uv.lock").exists()
         mode = "--locked" if locked else "--upgrade"
+        if locked and upgrade:
+            console.print("  [dim]Оновлюю uv.lock (uv lock --upgrade)...[/dim]")
+            if subprocess.run([uv_bin, "lock", "--upgrade"], cwd=cwd_dir, env=env).returncode:
+                console.print("  [yellow]⚠[/yellow]  uv lock --upgrade завершився з помилкою")
+                return
         console.print(f"  [dim]Оновлюю Python пакети (uv sync {mode})...[/dim]")
         # --inexact: keep packages outside the framework's lock — the apps
         # (editable) and their dependencies, installed by `grunt app deps`.
@@ -404,8 +447,9 @@ def _update_python_packages() -> None:
         console.print("  [yellow]⚠[/yellow]  Ні uv, ні pip не знайдено")
 
 
-def _run_npm_install(app_dir: Path) -> None:
-    """Встановити npm пакети."""
+def _run_npm_install(app_dir: Path, upgrade: bool = False) -> None:
+    """Встановити npm пакети; *upgrade* — ``npm update`` (найновіші в межах
+    package.json, з переписаним package-lock.json)."""
     import shutil  # noqa: PLC0415
 
     mise = shutil.which("mise")
@@ -417,6 +461,14 @@ def _run_npm_install(app_dir: Path) -> None:
             console.print("  [yellow]⚠[/yellow]  npm не знайдено")
             return
         npm_run = [npm]
+
+    if upgrade:
+        console.print(f"  [dim]Оновлюю npm пакети ({app_dir.name}, npm update)...[/dim]")
+        if subprocess.run([*npm_run, "update"], cwd=str(app_dir), check=False).returncode == 0:
+            console.print("  [green]✓[/green] npm пакети оновлені (package-lock.json змінено)")
+            return
+        console.print("  [yellow]⚠[/yellow]  npm update завершився з помилкою")
+        return
 
     console.print(f"  [dim]Встановлюю npm пакети ({app_dir.name})...[/dim]")
     no_lock = [*npm_run, "install", "--no-package-lock"]
@@ -565,6 +617,12 @@ _COMPONENTS = ("cli", "framework", "apps", "deps")
     default=False,
     help="Оновити системні залежності (Python, Node.js тощо)",
 )
+@click.option(
+    "--upgrade-packages",
+    is_flag=True,
+    default=False,
+    help="Розробка: оновити uv.lock і package-lock.json до найновіших версій (потім закомітити)",
+)
 @click.option("--skip-packages", is_flag=True, default=False, help="Не оновлювати Python пакети")
 @click.option("--skip-npm", is_flag=True, default=False, help="Не встановлювати npm пакети")
 @click.option("--skip-migrate", is_flag=True, default=False, help="Не запускати міграції БД")
@@ -606,6 +664,7 @@ def update(
     update_framework: bool,
     update_apps: bool,
     update_deps: bool,
+    upgrade_packages: bool,
     skip_packages: bool,
     skip_npm: bool,
     skip_migrate: bool,
@@ -621,7 +680,8 @@ def update(
     \b
     Послідовність:
       1. git fetch + rebase для CLI, фреймворку та додатків
-      2. mise install (системні залежності: Python, Node.js тощо)
+      2. mise self-update, mise install + upgrade (Node.js, uv у межах mise.toml),
+         uv python upgrade (патч Python), rclone selfupdate
       3. uv sync --locked --inexact + grunt app deps (клонує відсутні додатки з
          depends_on, ставить Python пакети фреймворку й додатків)
       4. npm install
@@ -651,11 +711,22 @@ def update(
       grunt update --tag            фреймворк і додатки — на найновіші релізи
       grunt update framework --tag v0.2.0   закріпити (або відкотити) версію
       grunt update --branch         голова гілки замість релізів
+      grunt update --upgrade-packages   розробка: найновіші пакети в uv.lock і package-lock.json
+
+    \b
+    Пакети на проді ставляться рівно за закоміченими lock-файлами: новіші
+    версії приходять релізом фреймворку (--upgrade-packages там заборонено —
+    брудне дерево зупинило б наступне оновлення).
     """
     if tag is not None and follow_branch:
         raise click.UsageError("--tag і --branch взаємовиключні")
     bench = get_bench_dir()
     production = bool(bench and installed_units(bench))
+    if upgrade_packages and production:
+        raise click.UsageError(
+            "--upgrade-packages — лише в розробці: на проді пакети ставляться за lock-файлами"
+            " з релізу фреймворку"
+        )
     app_tag = None if tag is None else "latest"
 
     # `grunt update cli` == `grunt update --cli` тощо
@@ -762,7 +833,7 @@ def update(
     # ── 5. Python пакети ────────────────────────────────────────────
     if not skip_packages:
         console.print("[bold cyan]Python пакети[/bold cyan]")
-        _update_python_packages()
+        _update_python_packages(upgrade=upgrade_packages)
         updated_something = True
         console.print()
     else:
@@ -773,10 +844,10 @@ def update(
     if not skip_npm:
         console.print("[bold cyan]npm пакети[/bold cyan]")
         apps_dir = _find_apps_dir()
-        if framework_deps_done:
+        if framework_deps_done and not upgrade_packages:
             console.print("  [green]✓[/green] npm пакети вже встановлені (mise run deps)")
         elif apps_dir and (apps_dir / "grunt").exists():
-            _run_npm_install(apps_dir / "grunt")
+            _run_npm_install(apps_dir / "grunt", upgrade=upgrade_packages)
             updated_something = True
         else:
             console.print("  [dim]Grunt app директорія не знайдена[/dim]")
