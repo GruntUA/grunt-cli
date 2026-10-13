@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import click
@@ -399,18 +400,75 @@ def _in_use() -> dict[str, str]:
             for line in (Path(root) / "pyvenv.cfg").read_text().splitlines():
                 key, _, value = line.partition("=")
                 if key.strip() == "home" and value.strip():
-                    venv = "~/" + str(Path(root).relative_to(home))
-                    used.setdefault(os.path.realpath(value.strip()), f"venv {venv}")
+                    used.setdefault(os.path.realpath(value.strip()), _venv_user(Path(root)))
         except OSError:
             continue
     for exe in Path("/proc").glob("[0-9]*/exe"):
         try:
             path = os.path.realpath(exe)
-            name = (exe.parent / "comm").read_text().strip()
         except OSError:
             continue
-        used.setdefault(path, f"процес {exe.parent.name} ({name})")
+        used.setdefault(path, _process_user(exe.parent))
     return used
+
+
+def _venv_user(venv: Path) -> str:
+    """«venv ~/x → як перевести його на поточний Python»."""
+    home = Path.home()
+    shown = "~/" + str(venv.relative_to(home)) if venv.is_relative_to(home) else str(venv)
+    py = f"{sys.version_info.major}.{sys.version_info.minor}"
+    tools = Path(os.environ.get("UV_TOOL_DIR") or home / ".local/share/uv/tools")
+    if venv.parent == tools:
+        return f"uv tool {venv.name} → uv tool install --reinstall --python {py} {venv.name}"
+    if (venv.parent / "pyproject.toml").is_file():
+        project = (
+            "~/" + str(venv.parent.relative_to(home)) if venv.is_relative_to(home) else venv.parent
+        )
+        return f"venv {shown} → cd {project} && uv sync --python {py}"
+    return f"venv {shown} → створіть заново: uv venv --python {py} {shown}"
+
+
+def _process_user(proc: Path) -> str:
+    """«процес 123 (grunt serve, 6 дн) → kill 123»."""
+    try:
+        argv = [
+            a.decode(errors="replace") for a in (proc / "cmdline").read_bytes().split(b"\0") if a
+        ]
+    except OSError:
+        argv = []
+    # python /path/bin/grunt serve → grunt serve
+    args = argv[1:] if argv and Path(argv[0]).name.startswith("python") and len(argv) > 1 else argv
+    command = " ".join([Path(args[0]).name, *args[1:3]]) if args else "?"
+    pid = proc.name
+    try:
+        state = (proc / "stat").read_text().rsplit(")", 1)[1].split()[0]
+    except (OSError, IndexError):
+        state = ""
+    if state == "T":
+        # Зупинений (Ctrl+Z) не обробить SIGTERM, доки його не розбудити.
+        fix = f"kill {pid} && kill -CONT {pid}"
+        return f"процес {pid} ({command}, {_age(proc)}, зупинений Ctrl+Z) → {fix}"
+    return f"процес {pid} ({command}, {_age(proc)}) → kill {pid}"
+
+
+def _age(proc: Path) -> str:
+    try:
+        start = int((proc / "stat").read_text().rsplit(")", 1)[1].split()[19])
+        # btime, не /proc/uptime: у контейнері (LXC) uptime — від старту
+        # контейнера, а час старту процесу — від завантаження хоста.
+        btime = next(
+            int(line.split()[1])
+            for line in Path("/proc/stat").read_text().splitlines()
+            if line.startswith("btime ")
+        )
+        seconds = time.time() - (btime + start / os.sysconf("SC_CLK_TCK"))
+    except (OSError, ValueError, IndexError, StopIteration):
+        return "?"
+    if seconds >= 86400:
+        return f"{int(seconds // 86400)} дн"
+    if seconds >= 3600:
+        return f"{int(seconds // 3600)} год"
+    return f"{max(int(seconds // 60), 1)} хв"
 
 
 _CACHE_TIMEOUT = 120
@@ -446,19 +504,22 @@ def _uv_cache_holders() -> str:
     return ", ".join(sorted(found))
 
 
-def _print_cleanup_summary(removed: list[str], kept: list[str]) -> None:
-    """Зведення прибирання під підсумком оновлення: що звільнено і що ще
-    тримають (та хто) — його прибере наступний `grunt update`."""
+def _print_cleanup_summary(removed: list[str], kept: list[str], notes: list[str]) -> None:
+    """Зведення прибирання під підсумком оновлення: що звільнено, що ще
+    тримають (хто і як його звільнити) — його прибере наступний `grunt update`."""
     if removed:
         console.print(f"  [dim]Видалено старі рантайми: {', '.join(removed)}[/dim]")
     if kept:
         console.print("  [yellow]Залишено старі рантайми (ще використовуються):[/yellow]")
         for line in kept:
-            console.print(f"    [dim]{line}[/dim]")
-        console.print(
-            "  [dim]Наступний grunt update прибере їх, щойно вони звільняться"
-            " (перезапустіть процес або оновіть venv).[/dim]"
-        )
+            label, _, user = line.partition(" — ")
+            who, _, fix = user.partition(" → ")
+            console.print(f"    {label} [dim]— {who}[/dim]")
+            if fix:
+                console.print(f"      [dim]звільнити:[/dim] [cyan]{fix}[/cyan]")
+        console.print("  [dim]Наступний grunt update прибере їх, щойно вони звільняться.[/dim]")
+    for note in notes:
+        console.print(f"  [dim]{note}[/dim]")
 
 
 def _current_pythons() -> set[Path]:
@@ -483,10 +544,12 @@ def _user_of(used: dict[str, str], directory: Path) -> str | None:
 _MISE_PRUNABLE = re.compile(r"^mise (\S+?)@(\S+) is prunable", re.M)
 
 
-def _cleanup_runtimes() -> tuple[list[str], list[str]]:
+def _cleanup_runtimes() -> tuple[list[str], list[str], list[str]]:
     """Прибрати рантайми, які оновлення залишило без діла.
 
-    Повертає ``(видалено, залишено)`` — рядки для зведення наприкінці.
+    Повертає ``(видалено, залишено, примітки)`` — рядки для зведення
+    наприкінці; примітки — те, що пропущено, але це нормально (кеш uv, поки
+    працює grunt serve).
 
     \b
     uv python   версії, на які не вказує жоден venv і не працює жоден процес
@@ -501,6 +564,7 @@ def _cleanup_runtimes() -> tuple[list[str], list[str]]:
     used = _in_use()
     removed: list[str] = []
     kept: list[str] = []
+    notes: list[str] = []
 
     def remove(cmd: list[str], label: str) -> None:
         if _step(cmd, f"Видалено {label}", quiet=True):
@@ -538,7 +602,7 @@ def _cleanup_runtimes() -> tuple[list[str], list[str]]:
         if holders := _uv_cache_holders():
             # prune бере ексклюзивне блокування кешу, а `uv run` (grunt serve)
             # тримає спільне весь час, поки працює — prune чекав би вічно.
-            kept.append(f"кеш uv — {holders}")
+            notes.append(f"Кеш uv не чищено — його тримає {holders}")
         else:
             _quick([uv_bin, "cache", "prune"], {"UV_LOCK_TIMEOUT": "30"})
 
@@ -568,7 +632,7 @@ def _cleanup_runtimes() -> tuple[list[str], list[str]]:
     npm = shutil.which("npm")
     if npm:
         _quick([npm, "cache", "verify"])
-    return removed, kept
+    return removed, kept, notes
 
 
 def _update_python_packages(upgrade: bool = False) -> None:
@@ -1182,9 +1246,10 @@ def update(
     # не стартували на новому.
     removed: list[str] = []
     kept: list[str] = []
+    notes: list[str] = []
     if (update_all or update_deps) and not keep_old:
         console.print("[bold cyan]Прибирання[/bold cyan]")
-        removed, kept = _cleanup_runtimes()
+        removed, kept, notes = _cleanup_runtimes()
         if not removed and not kept:
             console.print("  [green]✓[/green] Старих версій рантаймів немає")
         console.print()
@@ -1194,7 +1259,7 @@ def update(
         console.print("[yellow]Нічого не оновлено[/yellow]")
     elif restarted:
         console.print("[bold green]✅ Оновлення завершено[/bold green]")
-        _print_cleanup_summary(removed, kept)
+        _print_cleanup_summary(removed, kept, notes)
     else:
         console.print("[bold red]✗ Оновлення завершено з помилками[/bold red]")
         raise SystemExit(1)

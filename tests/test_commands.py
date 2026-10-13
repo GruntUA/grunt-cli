@@ -1325,7 +1325,7 @@ class TestCleanup:
             return MagicMock(returncode=0, stdout=json.dumps(listed) if "list" in cmd else "")
 
         monkeypatch.setattr(update.subprocess, "run", fake_run)
-        removed, kept = update._cleanup_runtimes()
+        removed, kept, _notes = update._cleanup_runtimes()
 
         uninstalled = [c[-1] for c in calls if c[1:3] == ["python", "uninstall"]]
         assert uninstalled == ["cpython-3.14.4-linux-x86_64-gnu"]
@@ -1359,7 +1359,7 @@ class TestCleanup:
             return MagicMock(returncode=0, stdout="", stderr=plan if "--dry-run" in cmd else "")
 
         monkeypatch.setattr(update.subprocess, "run", fake_run)
-        removed, kept = update._cleanup_runtimes()
+        removed, kept, _notes = update._cleanup_runtimes()
 
         # лише інструменти з mise.toml — rclone та інше не згадується
         assert calls[0] == ["/bin/mise", "prune", "--dry-run", "node", "python", "uv"]
@@ -1382,9 +1382,10 @@ class TestCleanup:
             "run",
             lambda cmd, **kw: calls.append(cmd) or MagicMock(returncode=0, stdout="[]"),
         )
-        _removed, kept = update._cleanup_runtimes()
+        _removed, kept, notes = update._cleanup_runtimes()
         assert ["/bin/uv", "cache", "prune"] not in calls
-        assert kept == ["кеш uv — процес 5 (uv run uvicorn)"]
+        assert notes == ["Кеш uv не чищено — його тримає процес 5 (uv run uvicorn)"]
+        assert kept == []
 
     def test_slow_cache_cleanup_is_skipped(self, monkeypatch):
         import subprocess as sp
@@ -1406,7 +1407,11 @@ class TestCleanup:
     @patch("grunt_cli.commands.update._find_apps_dir", return_value=None)
     @patch(
         "grunt_cli.commands.update._cleanup_runtimes",
-        return_value=(["uv 0.11.7 (mise)"], ["Python 3.14.4 (uv) — процес 42 (uvicorn)"]),
+        return_value=(
+            ["uv 0.11.7 (mise)"],
+            ["Python 3.14.4 (uv) — процес 42 (grunt serve, 6 дн) → kill 42"],
+            [],
+        ),
     )
     def test_summary_and_keep_old(
         self, cleanup, _apps, _cli, _migrate, _runtimes, _npm, _packages, runner
@@ -1416,7 +1421,8 @@ class TestCleanup:
         cleanup.assert_called_once()
         tail = result.output.split("Оновлення завершено", 1)[1]
         assert "Видалено старі рантайми: uv 0.11.7 (mise)" in tail
-        assert "Python 3.14.4 (uv) — процес 42 (uvicorn)" in tail
+        assert "Python 3.14.4 (uv) — процес 42 (grunt serve, 6 дн)" in tail
+        assert "звільнити: kill 42" in tail
 
         cleanup.reset_mock()
         assert runner.invoke(cli, ["update", "--keep-old", "--no-upgrade-packages"]).exit_code == 0

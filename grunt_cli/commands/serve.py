@@ -97,6 +97,60 @@ def _kill_stale_processes(grunt_dir: Path) -> None:
             killpg(pgid, signal.SIGKILL)
 
 
+def _find_old_supervisors(bench_dir: Path) -> list[int]:
+    """Earlier `grunt serve` processes of this bench (run from it or a site in it).
+
+    Killing only their children is not enough: a supervisor stopped with
+    Ctrl+Z ignores even SIGTERM until resumed, and would hang there forever.
+    """
+    bench = bench_dir.resolve()
+    me = os.getpid()
+    ancestors = {me, os.getppid()}
+    found: list[int] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit() or int(entry.name) in ancestors:
+            continue
+        try:
+            argv = (entry / "cmdline").read_bytes().split(b"\0")
+            cwd = Path(os.readlink(entry / "cwd")).resolve()
+        except OSError:
+            continue
+        names = [Path(a.decode(errors="replace")).name for a in argv[:3]]
+        if "grunt" not in names or b"serve" not in argv:
+            continue
+        if cwd == bench or bench in cwd.parents:
+            found.append(int(entry.name))
+    return found
+
+
+def _running(pid: int) -> bool:
+    """Alive and not a zombie (an exited child its parent has not reaped yet)."""
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except (OSError, IndexError):
+        return False
+    return state not in ("Z", "X")
+
+
+def _stop_old_supervisors(bench_dir: Path) -> None:
+    if not Path("/proc").is_dir():
+        return
+    pids = _find_old_supervisors(bench_dir)
+    if not pids:
+        return
+    console.print(f"  [dim]Зупиняю попередній grunt serve (PID: {', '.join(map(str, pids))})[/dim]")
+    for pid in pids:
+        for sig in (signal.SIGTERM, signal.SIGCONT):  # CONT: розбудити зупиненого (Ctrl+Z)
+            with contextlib.suppress(OSError):
+                os.kill(pid, sig)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and any(_running(p) for p in pids):
+        time.sleep(0.2)
+    for pid in pids:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGKILL)
+
+
 @click.command()
 @click.option("--host", default="0.0.0.0", show_default=True, help="Bind host для backend")
 @click.option("--port", default=8000, show_default=True, help="Порт backend")
@@ -199,7 +253,25 @@ def _serve_bench(
     # would not get the hangup themselves.
     signal.signal(signal.SIGHUP, shutdown)
 
+    def suspend(sig=None, frame=None):
+        # Ctrl+Z: children live in their own sessions and do not get it - stop
+        # them together with us, or `grunt serve` sleeps while they keep running.
+        pgids = [p.pid for p in procs]
+        for pgid in pgids:
+            with contextlib.suppress(OSError):
+                killpg(pgid, signal.SIGSTOP)
+        console.print("\n[dim]Призупинено (fg — продовжити, Ctrl+C — зупинити)[/dim]")
+        signal.signal(signal.SIGTSTP, signal.SIG_DFL)
+        os.kill(os.getpid(), signal.SIGTSTP)  # stops here until SIGCONT
+        signal.signal(signal.SIGTSTP, suspend)
+        for pgid in pgids:
+            with contextlib.suppress(OSError):
+                killpg(pgid, signal.SIGCONT)
+
+    signal.signal(signal.SIGTSTP, suspend)
+
     # Free ports / kill leftovers from a previous run
+    _stop_old_supervisors(bench_dir)
     if not frontend_only:
         _kill_stale_processes(grunt_dir)
         _kill_port(port)
