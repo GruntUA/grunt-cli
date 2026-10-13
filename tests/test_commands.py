@@ -1056,14 +1056,32 @@ class TestUpdateToRelease:
         assert _update_repo(wc, "wc", tag=None, branch=False, production=False)
         assert self._at(wc, "v0.3.0")
 
-    def test_pin_older_release_warns_about_migrations(self, tmp_path, capsys):
+    def test_pin_older_release_without_migrations(self, tmp_path):
         from grunt_cli.commands.update import _update_repo
 
         _, wc = self._repo(tmp_path)
         assert _update_repo(wc, "wc", tag=None, branch=False, production=True)
         assert _update_repo(wc, "wc", tag="v0.1.0", branch=False, production=True)
         assert self._at(wc, "v0.1.0")
-        assert "міграції БД назад не відкочуються" in capsys.readouterr().out
+
+    def test_rollback_past_a_migration_needs_force(self, tmp_path, capsys):
+        from grunt_cli.commands.update import _update_repo
+
+        up, wc = self._repo(tmp_path)
+        migration = up / "grunt" / "db" / "migrations" / "versions" / "0011_x.py"
+        migration.parent.mkdir(parents=True)
+        migration.write_text("")
+        subprocess.run(["git", "-C", str(up), "add", "."], check=True)
+        self._commit(up, "migration", "v0.3.0")
+
+        assert _update_repo(wc, "wc", tag=None, branch=False, production=True)
+        assert self._at(wc, "v0.3.0")
+        assert not _update_repo(wc, "wc", tag="v0.2.0", branch=False, production=True)
+        assert self._at(wc, "v0.3.0")
+        assert "0011_x" in capsys.readouterr().out
+
+        assert _update_repo(wc, "wc", tag="v0.2.0", branch=False, production=True, force=True)
+        assert self._at(wc, "v0.2.0")
 
     def test_unknown_release_fails(self, tmp_path):
         from grunt_cli.commands.update import _update_repo

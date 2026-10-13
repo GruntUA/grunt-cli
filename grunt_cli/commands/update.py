@@ -120,7 +120,26 @@ def _current_tag(path: Path) -> str | None:
     return found[0] if found else None
 
 
-def _git_checkout_tag(path: Path, label: str, tag: str | None) -> bool:
+def _lost_migrations(path: Path, target: str) -> list[str]:
+    """Міграції БД, які є в поточному коді, але відсутні в ``target``.
+
+    Якщо такі є, база вже пройшла міграцію, про яку старий код нічого не знає.
+    Відкат коду тут не допоможе, потрібне відновлення бекапу.
+    """
+    out = _git(
+        path,
+        "diff",
+        "--name-only",
+        "--diff-filter=D",
+        "HEAD",
+        target,
+        "--",
+        ":(glob)**/migrations/versions/*.py",
+    ).stdout
+    return sorted(Path(line).stem for line in out.split())
+
+
+def _git_checkout_tag(path: Path, label: str, tag: str | None, force: bool = False) -> bool:
     """Поставити репозиторій на реліз ``tag`` (None — найновіший)."""
     if not (path / ".git").exists():
         console.print(f"  [yellow]⚠[/yellow]  {label}: не є git-репозиторієм, пропускаю")
@@ -144,6 +163,18 @@ def _git_checkout_tag(path: Path, label: str, tag: str | None) -> bool:
         console.print(f"  [red]✗[/red] {label}: є незакомічені зміни — реліз не встановлено")
         return False
 
+    lost = _lost_migrations(path, target)
+    if lost and not force:
+        console.print(
+            f"  [red]✗[/red] {label}: у {target} немає міграцій БД, які вже застосовано: "
+            + ", ".join(lost)
+        )
+        console.print(
+            "    [dim]Старий код не працюватиме з такою базою. Спершу відновіть бекап,"
+            " зроблений до оновлення (grunt db restore), потім повторіть з --force[/dim]"
+        )
+        return False
+
     old_hash = _short_head(path)
     result = _git(path, "checkout", "-q", "--detach", target)
     if result.returncode != 0:
@@ -153,9 +184,9 @@ def _git_checkout_tag(path: Path, label: str, tag: str | None) -> bool:
 
     was = current or old_hash
     console.print(f"  [green]✓[/green] {label}: {was} → {target}")
-    if current and tags.index(target) > tags.index(current):
+    if lost:
         console.print(
-            "    [yellow]Відкат на старіший реліз: міграції БД назад не відкочуються[/yellow]"
+            "    [yellow]Відкат повз міграції БД: " + ", ".join(lost) + " (--force)[/yellow]"
         )
     _report_change(path, label, old_hash, _short_head(path), quiet=True)
     return True
@@ -176,7 +207,13 @@ def _switch_to_branch(path: Path, label: str) -> bool:
 
 
 def _update_repo(
-    path: Path, label: str, *, tag: str | None, branch: bool, production: bool
+    path: Path,
+    label: str,
+    *,
+    tag: str | None,
+    branch: bool,
+    production: bool,
+    force: bool = False,
 ) -> bool:
     """Оновити репозиторій: на реліз-тег або на голову гілки.
 
@@ -191,7 +228,7 @@ def _update_repo(
         return _switch_to_branch(path, label) and _git_pull(path, label)
     has_git = (path / ".git").exists()
     if tag is not None or (has_git and (_current_tag(path) or (production and release_tags(path)))):
-        return _git_checkout_tag(path, label, None if tag in (None, "latest") else tag)
+        return _git_checkout_tag(path, label, None if tag in (None, "latest") else tag, force)
     return _git_pull(path, label)
 
 
@@ -556,6 +593,12 @@ _COMPONENTS = ("cli", "framework", "apps", "deps")
     default=False,
     help="Голова гілки замість релізів (і повернення з тегу на гілку)",
 )
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Відкотити реліз, навіть якщо в базі вже є його міграції (після відновлення бекапу)",
+)
 @click.option("--site", default=None, help="Назва сайту (для migrate)")
 def update(
     component: str | None,
@@ -570,6 +613,7 @@ def update(
     no_restart: bool,
     tag: str | None,
     follow_branch: bool,
+    force: bool,
     site: str | None,
 ) -> None:
     """Оновити CLI, фреймворк, додатки, пакети та схему БД.
@@ -661,7 +705,12 @@ def update(
             console.print("  [yellow]⚠[/yellow]  Grunt framework не знайдено")
         else:
             _update_repo(
-                framework_dir, "grunt", tag=tag, branch=follow_branch, production=production
+                framework_dir,
+                "grunt",
+                tag=tag,
+                branch=follow_branch,
+                production=production,
+                force=force,
             )
             if not no_deps:
                 framework_deps_done = _install_deps(framework_dir, "grunt")
@@ -692,6 +741,7 @@ def update(
                         tag=app_tag,
                         branch=follow_branch,
                         production=production,
+                        force=force,
                     )
                     if not no_deps:
                         _install_deps(app_dir, app_dir.name)
