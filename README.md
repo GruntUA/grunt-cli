@@ -139,6 +139,21 @@ fine-grained token and stores it for that repository only.
 
 ---
 
+### `grunt upgrade`
+
+Upgrade all dependencies to their latest versions and update configuration files (`mise.toml`, `package.json`, `pyproject.toml`, lock files):
+
+```bash
+grunt upgrade                 # upgrade everything: mise, uv, Node.js, Python, rclone, packages
+grunt upgrade --dry-run       # preview updates without modifying files
+grunt upgrade runtimes        # only system runtimes (mise, uv, node, python, rclone)
+grunt upgrade packages        # only Python & Node.js packages and version files
+grunt upgrade python          # only Python and its packages
+grunt upgrade node            # only Node.js and npm packages
+```
+
+---
+
 ### `grunt setup production`
 
 Turn the active site into a production deployment behind Cloudflare:

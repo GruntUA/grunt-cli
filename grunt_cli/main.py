@@ -26,6 +26,7 @@ from grunt_cli.commands.shell import shell
 from grunt_cli.commands.sites import sites
 from grunt_cli.commands.test import test
 from grunt_cli.commands.update import update
+from grunt_cli.commands.upgrade import upgrade
 from grunt_cli.commands.users import users
 
 
@@ -84,6 +85,7 @@ cli.add_command(users)
 cli.add_command(app)
 cli.add_command(migrate)
 cli.add_command(update)
+cli.add_command(upgrade)
 cli.add_command(sites)
 cli.add_command(test)
 cli.add_command(master)

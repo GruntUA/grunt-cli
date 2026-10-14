@@ -1014,6 +1014,13 @@ _COMPONENTS = ("cli", "framework", "apps", "deps")
     help="Оновити системні залежності (Python, Node.js тощо)",
 )
 @click.option(
+    "--upgrade",
+    "do_upgrade",
+    is_flag=True,
+    default=False,
+    help="Оновити всі залежності та файли версій до останьої версії (еквівалент grunt upgrade)",
+)
+@click.option(
     "--upgrade-packages",
     is_flag=True,
     default=False,
@@ -1075,6 +1082,7 @@ def update(
     update_framework: bool,
     update_apps: bool,
     update_deps: bool,
+    do_upgrade: bool,
     upgrade_packages: bool,
     no_upgrade_packages: bool,
     skip_packages: bool,
@@ -1129,6 +1137,7 @@ def update(
       grunt update --tag            фреймворк і додатки — на найновіші релізи
       grunt update framework --tag v0.2.0   закріпити (або відкотити) версію
       grunt update --branch         голова гілки замість релізів
+      grunt update --upgrade        найновіші версії залежностей (grunt upgrade)
       grunt update --upgrade-packages   розробка: найновіші пакети без питання
       grunt update -v               повний вивід підпроцесів (для діагностики)
 
@@ -1139,6 +1148,25 @@ def update(
     сам показує новіші версії пакетів і питає, чи оновити lock-файли
     (без терміналу — лише показує; --no-upgrade-packages — не перевіряти).
     """
+    if do_upgrade:
+        from grunt_cli.commands.upgrade import upgrade as upgrade_cmd
+
+        ctx = click.get_current_context()
+        ctx.invoke(
+            upgrade_cmd,
+            component="all",
+            dry_run=False,
+            skip_runtimes=False,
+            skip_packages=skip_packages,
+            skip_python=skip_packages,
+            skip_node=skip_npm,
+            skip_cli=False,
+            skip_migrate=skip_migrate,
+            keep_old=keep_old,
+            verbose=verbose,
+        )
+        return
+
     helpers.VERBOSE = verbose
     if upgrade_packages and no_upgrade_packages:
         raise click.UsageError("--upgrade-packages і --no-upgrade-packages взаємовиключні")

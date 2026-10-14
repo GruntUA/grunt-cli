@@ -1563,3 +1563,91 @@ class TestQuietOutput:
         monkeypatch.setattr(helpers, "VERBOSE", True)
         assert helpers.run_captured([sys.executable, "-c", "print('Resolved 129')"]) == 0
         assert "Resolved 129" in capfd.readouterr().out
+
+
+class TestUpgrade:
+    def test_upgrade_help(self, runner):
+        from grunt_cli.main import cli
+
+        result = runner.invoke(cli, ["upgrade", "--help"])
+        assert result.exit_code == 0
+        assert "--dry-run" in result.output
+        assert "--skip-runtimes" in result.output
+        assert "--skip-packages" in result.output
+
+    def test_update_upgrade_flag_help(self, runner):
+        from grunt_cli.main import cli
+
+        result = runner.invoke(cli, ["update", "--help"])
+        assert result.exit_code == 0
+        assert "--upgrade" in result.output
+
+    def test_update_pyproject_deps(self, tmp_path):
+        from grunt_cli.commands.upgrade import _update_pyproject_deps
+
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text(
+            '[project]\n'
+            'dependencies = [\n'
+            '    "fastapi>=0.111.0",\n'
+            '    "uvicorn[standard]>=0.29.0",  # server\n'
+            '    "click>=8.1.0",\n'
+            ']\n'
+        )
+
+        locked = {
+            "fastapi": "0.143.1",
+            "uvicorn": "0.54.0",
+            "click": "8.1.0",  # unchanged
+        }
+
+        changes = _update_pyproject_deps(pyproject, locked, dry_run=False)
+        assert len(changes) == 2
+        assert "fastapi: 0.111.0 → 0.143.1" in changes
+        assert "uvicorn: 0.29.0 → 0.54.0" in changes
+
+        new_text = pyproject.read_text()
+        assert '"fastapi>=0.143.1",' in new_text
+        assert '"uvicorn[standard]>=0.54.0",  # server' in new_text
+        assert '"click>=8.1.0",' in new_text
+
+    def test_update_mise_toml(self, tmp_path):
+        from grunt_cli.commands.upgrade import _update_mise_toml
+
+        mise_file = tmp_path / "mise.toml"
+        mise_file.write_text(
+            '[tools]\n'
+            'node = "24"\n'
+            'python = "3.14"\n'
+            'uv = "latest"\n'
+        )
+
+        changes = _update_mise_toml(mise_file, node_ver="26", python_ver="3.15", dry_run=False)
+        assert len(changes) == 2
+        assert "node: 24 → 26" in changes
+        assert "python: 3.14 → 3.15" in changes
+
+        new_text = mise_file.read_text()
+        assert 'node = "26"' in new_text
+        assert 'python = "3.15"' in new_text
+        assert 'uv = "latest"' in new_text
+
+    @patch("grunt_cli.commands.upgrade._cleanup_runtimes", return_value=([], [], []))
+    @patch("grunt_cli.commands.upgrade._run_migrations", return_value=True)
+    @patch("grunt_cli.commands.upgrade._upgrade_cli_itself")
+    @patch("grunt_cli.commands.upgrade._upgrade_python_packages")
+    @patch("grunt_cli.commands.upgrade._upgrade_node_packages")
+    @patch("grunt_cli.commands.upgrade._upgrade_runtimes")
+    def test_upgrade_dry_run_invokes_steps(
+        self, mock_runtimes, mock_node, mock_py, mock_cli, _migrate, _cleanup, runner
+    ):
+        from grunt_cli.main import cli
+
+        result = runner.invoke(cli, ["upgrade", "--dry-run"])
+        assert result.exit_code == 0
+        assert "Grunt Upgrade" in result.output
+        mock_runtimes.assert_called_once_with(dry_run=True)
+        mock_node.assert_called_once_with(dry_run=True)
+        mock_py.assert_called_once_with(dry_run=True)
+        mock_cli.assert_called_once_with(dry_run=True)
+
