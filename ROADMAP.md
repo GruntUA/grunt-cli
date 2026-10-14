@@ -77,6 +77,53 @@ DocType без таблиці в БД — дані з зовнішнього API
 "У цього Контрагента — 15 Договорів, 3 Рахунки".
 Connections panel + auto-generated dashboard counts.
 
+**Статус:** частково. Панель «Зв'язки» з лічильниками й прев'ю вже є:
+`DocType.links` (`DocTypeLink`, `grunt/metadata/doctype.py:214`) →
+`grunt.document.connections.get_connections` → `DocConnections.vue`.
+Бракує решти Frappe Form Dashboard
+(див. https://discuss.frappe.io/t/how-to-guide-frappe-form-dashboards/135642).
+
+### Що потрібно: `frm.dashboard` (клієнтський API форми)
+Нова область `FormDashboard.vue` над полями форми (у `FormRenderer.vue`, поруч із
+`DocConnections`), стан якої керується з Client Script через `frm.dashboard`
+(додати в `FormProxy`, `frontend/src/core/scripting/executor.ts`, за зразком
+`toggle_sidebar` → `_sidebar_hidden`: скрипт пише в реактивний стан, компонент рендерить).
+Стан скидається при кожному `refresh` документа (як у Frappe `frm.dashboard.reset()`).
+
+- [ ] `set_headline(html, color?)` / `clear_headline()` — банер-повідомлення над формою
+      (аналог `set_intro`); HTML санітизувати (DOMPurify), колір із палітри status_indicators.
+- [ ] `add_indicator(label, color)` — рядок stat-бейджів («Оплачено: 12 000 ₴» зеленим).
+- [ ] `add_progress(title, percent | [{title, width, progress_class}], message?)` —
+      progress-бари (кілька сегментів, як у Frappe).
+- [ ] `render_graph({ data: {labels, datasets}, type, colors })` — перевикористати
+      `frontend/src/core/charts.ts` / віджет `dashboard/widgets/Chart`.
+- [ ] `render_heatmap({ data: {dataPoints, start, end} })` — перевикористати
+      `dashboard/widgets/Heatmap`.
+- [ ] `add_section(body_html, label?, css_class?, hidden?)` / `clear_section(name)` —
+      довільна HTML-секція.
+- [ ] `set_badge_count(link_doctype, open_count, count)` — перекрити лічильник
+      чипа в `DocConnections` (для нестандартних підрахунків).
+- [ ] `show()` / `hide()` / `reset()`; `add_comment(text, alert_class, permanent)` —
+      тимчасове alert-повідомлення (скидається на refresh, якщо не `permanent`).
+- [ ] Типи в `FormProxy` + приклади в JSDoc; розділ у skill `grunt-dev` (Client Scripts).
+
+### Що потрібно: декларативний (серверний) бік
+- [ ] **Internal links** — зв'язки «вперед» з табличної частини цього документа
+      (напр. Рахунок → Замовлення через `items.sales_order`). Новий режим у
+      `DocTypeLink` (`direction: "internal"`, `table_fieldname` + `link_fieldname` на
+      дочірньому типі) і гілка в `connections.py`; зараз сервіс уміє лише backlinks.
+- [ ] **Open count** — другий лічильник «відкритих» (не submitted/не закритих)
+      документів у чипі, як у Frappe (`open_count / count`). Умова — через
+      `status_field` пов'язаного DocType або фільтр у `DocTypeLink.open_filters`.
+- [ ] **Heatmap активності** — `DocType.dashboard_heatmap: bool` (+ `heatmap_message`):
+      кількість подій ActivityLog по днях за рік для документа; endpoint у
+      `connections.py`, рендер тим самим Heatmap-віджетом.
+- [ ] **Python-хук `get_dashboard_data(doc)`** у контролері — повертає
+      indicators/progress/headline з сервера (для логіки, якої не порахувати на клієнті);
+      `FormDashboard.vue` мерджить їх зі станом `frm.dashboard`.
+- [ ] Тести: `tests/test_connections.py` (internal links, open_count, heatmap),
+      vitest для `frm.dashboard` (стан + reset на refresh).
+
 ---
 
 ## 9. Background Jobs UI
