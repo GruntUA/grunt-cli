@@ -11,7 +11,16 @@ def _no_real_cleanup(request, monkeypatch):
     never against the real machine from a test (TestCleanup opts in)."""
     if request.node.get_closest_marker("real_cleanup"):
         return
-    monkeypatch.setattr("grunt_cli.commands.update._cleanup_runtimes", lambda: ([], [], []))
+    monkeypatch.setattr("grunt_cli.commands.update._cleanup_runtimes", lambda *_: ([], [], []))
+
+
+@pytest.fixture(autouse=True)
+def _update_state(tmp_path, monkeypatch):
+    """Відбитки пропущених кроків `grunt update` — у тимчасовій теці тесту,
+    не в ~/.cache користувача."""
+    monkeypatch.setattr(
+        "grunt_cli.commands.update._STATE_FILE", tmp_path / "update-state" / "state.json"
+    )
 
 
 def pytest_configure(config):

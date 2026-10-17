@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import click
@@ -31,6 +34,10 @@ from grunt_cli.helpers import (
 # Реліз = анотований тег vX.Y.Z (`grunt release` у фреймворку). Пре-релізи
 # (v1.2.0-rc1) на прод не ставимо.
 _RELEASE_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+
+_TAG_FETCH = ("--tags", "--force")
+# (репозиторій, аргументи fetch), уже стягнуті наперед у цьому запуску (_prefetch).
+_prefetched: set[tuple[Path, tuple[str, ...]]] = set()
 
 
 def _git(path: Path, *args: str, env: dict[str, str] | None = None):
@@ -89,7 +96,7 @@ def _git_pull(path: Path, label: str) -> bool:
     # fetch + rebase на @{upstream} замість git pull: pull бере ціль з
     # .git/FETCH_HEAD, а паралельний fetch (напр. autofetch у VS Code) дописує
     # туди дублікат — і pull падає з "Cannot rebase onto multiple branches".
-    if not _git_fetch(path, label):
+    if (path, ()) not in _prefetched and not _git_fetch(path, label):
         return False
     result = _git(path, "rebase", "--autostash", "@{upstream}")
     if result.returncode != 0:
@@ -149,7 +156,7 @@ def _git_checkout_tag(path: Path, label: str, tag: str | None, force: bool = Fal
         console.print(f"  [yellow]⚠[/yellow]  {label}: не є git-репозиторієм, пропускаю")
         return False
     console.print(f"  [dim]Оновлюю {label} (релізи)...[/dim]")
-    if not _git_fetch(path, label, "--tags", "--force"):
+    if (path, _TAG_FETCH) not in _prefetched and not _git_fetch(path, label, *_TAG_FETCH):
         return False
 
     tags = release_tags(path)
@@ -230,10 +237,37 @@ def _update_repo(
     """
     if branch:
         return _switch_to_branch(path, label) and _git_pull(path, label)
-    has_git = (path / ".git").exists()
-    if tag is not None or (has_git and (_current_tag(path) or (production and release_tags(path)))):
+    if _wants_release(path, tag=tag, branch=branch, production=production):
         return _git_checkout_tag(path, label, None if tag in (None, "latest") else tag, force)
     return _git_pull(path, label)
+
+
+def _wants_release(path: Path, *, tag: str | None, branch: bool, production: bool) -> bool:
+    """Чи _update_repo поставить репозиторій на реліз-тег (а не на гілку)."""
+    if branch:
+        return False
+    has_git = (path / ".git").exists()
+    return tag is not None or (
+        has_git and bool(_current_tag(path) or (production and release_tags(path)))
+    )
+
+
+def _prefetch(repos: list[tuple[Path, tuple[str, ...]]]) -> None:
+    """``git fetch`` усіх репозиторіїв разом — час іде на мережу, а не на git.
+
+    Без запиту токена: що не вдалося стягнути тут, ще раз стягне _git_fetch
+    у _update_repo — уже з повтором після токена і зрозумілим повідомленням.
+    """
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+
+    def fetch(item: tuple[Path, tuple[str, ...]]) -> bool:
+        path, args = item
+        return _git(path, "fetch", *args, env=env).returncode == 0
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for item, ok in zip(repos, pool.map(fetch, repos), strict=True):
+            if ok:
+                _prefetched.add(item)
 
 
 def _report_change(
@@ -295,8 +329,11 @@ def _warn_stale_lock(label: str) -> None:
     )
 
 
-def _install_deps(path: Path, label: str) -> bool:
-    """Встановлює залежності через mise; True, якщо відпрацювала задача ``deps``."""
+def _install_deps(path: Path, label: str) -> bool | None:
+    """Встановлює залежності через mise.
+
+    True — відпрацювала задача ``deps``, False — вона впала, None — її немає.
+    """
     run_mise(path, "install", quiet=True, status=f"Оновлюю рантайми для {label}...")
 
     mise_toml = path / "mise.toml"
@@ -319,7 +356,7 @@ def _install_deps(path: Path, label: str) -> bool:
                 f"  [yellow]⚠[/yellow]  Пакети {label}: mise run deps завершився з помилкою"
             )
             return False
-    return False
+    return None
 
 
 # rclone, який фреймворк сам завантажує, коли на сервері його немає
@@ -590,7 +627,7 @@ def _users_of(used: dict[str, list[str]], directory: Path) -> list[str]:
 _MISE_PRUNABLE = re.compile(r"^mise (\S+?)@(\S+) is prunable", re.M)
 
 
-def _cleanup_runtimes() -> tuple[list[str], list[str], list[str]]:
+def _cleanup_runtimes(prune_caches: bool = True) -> tuple[list[str], list[str], list[str]]:
     """Прибрати рантайми, які оновлення залишило без діла.
 
     Повертає ``(видалено, залишено, примітки)`` — рядки для зведення
@@ -601,7 +638,7 @@ def _cleanup_runtimes() -> tuple[list[str], list[str], list[str]]:
     uv python   версії, на які не вказує жоден venv і не працює жоден процес
     mise        старі версії інструментів mise.toml (node, uv, python), так само
                 лише вільні; rclone та інше, поставлене mise вручну, не чіпаємо
-    uv cache prune, npm cache verify — невикористане з кешів
+    uv cache prune, npm cache verify — невикористане з кешів (лише з *prune_caches*)
     """
     import json  # noqa: PLC0415
     import shutil  # noqa: PLC0415
@@ -648,7 +685,9 @@ def _cleanup_runtimes() -> tuple[list[str], list[str], list[str]]:
                 kept.extend(f"{label} — {who}" for who in users)
             else:
                 remove([uv_bin, "python", "uninstall", py["key"]], label)
-        if holders := _uv_cache_holders():
+        if not prune_caches:
+            pass  # кеші чистимо раз на _CACHE_PRUNE_EVERY
+        elif holders := _uv_cache_holders():
             # prune бере ексклюзивне блокування кешу, а `uv run` (grunt serve)
             # тримає спільне весь час, поки працює — prune чекав би вічно.
             notes.append(f"Кеш uv не чищено — його тримає {holders}")
@@ -679,12 +718,12 @@ def _cleanup_runtimes() -> tuple[list[str], list[str], list[str]]:
                     remove([mise_bin, "uninstall", f"{tool}@{version}"], label)
 
     npm = shutil.which("npm")
-    if npm:
+    if npm and prune_caches:
         _quick([npm, "cache", "verify"])
     return removed, kept, notes
 
 
-def _update_python_packages(upgrade: bool = False) -> None:
+def _update_python_packages(upgrade: bool = False) -> bool:
     """Оновити Python пакети (uv sync --locked за uv.lock, без нього --upgrade; або pip).
 
     *upgrade* (розробка): спершу ``uv lock --upgrade`` — найновіші версії в
@@ -717,7 +756,7 @@ def _update_python_packages(upgrade: bool = False) -> None:
             )
         ):
             console.print("  [yellow]⚠[/yellow]  uv lock --upgrade завершився з помилкою")
-            return
+            return False
         # --inexact: keep packages outside the framework's lock — the apps
         # (editable) and their dependencies, installed by `grunt app deps`.
         if run_captured(
@@ -727,7 +766,7 @@ def _update_python_packages(upgrade: bool = False) -> None:
             status=f"Оновлюю Python пакети (uv sync {mode})...",
         ):
             console.print(f"  [yellow]⚠[/yellow]  uv sync {mode} завершився з помилкою")
-            return
+            return False
         apps = run_captured(
             [
                 uv_bin,
@@ -747,9 +786,9 @@ def _update_python_packages(upgrade: bool = False) -> None:
             console.print(
                 "  [yellow]⚠[/yellow]  Залежності додатків не встановились (grunt app deps)"
             )
-        else:
-            console.print("  [green]✓[/green] Python пакети оновлені (фреймворк + додатки)")
-        return
+            return False
+        console.print("  [green]✓[/green] Python пакети оновлені (фреймворк + додатки)")
+        return True
 
     # Fallback на pip
     pip_bin = shutil.which("pip") or shutil.which("pip3")
@@ -758,10 +797,11 @@ def _update_python_packages(upgrade: bool = False) -> None:
         result = subprocess.run([pip_bin, "install", "--upgrade", "pip"], check=False)
         if result.returncode != 0:
             console.print("  [yellow]⚠[/yellow]  pip update завершився з помилкою")
-        else:
-            console.print("  [green]✓[/green] Python пакети оновлені")
-    else:
-        console.print("  [yellow]⚠[/yellow]  Ні uv, ні pip не знайдено")
+            return False
+        console.print("  [green]✓[/green] Python пакети оновлені")
+        return True
+    console.print("  [yellow]⚠[/yellow]  Ні uv, ні pip не знайдено")
+    return False
 
 
 _UV_UPDATE = re.compile(r"^Update (\S+) v(\S+) -> v(\S+)$", re.M)
@@ -793,29 +833,46 @@ def _outdated_packages() -> tuple[list[str], list[str]]:
     # uv та npm — версії з mise.toml фреймворку, а не застарілі з PATH оболонки
     mise = get_mise_bin()
     via_mise = [mise, "exec", "--"] if mise else []
-    updates: list[str] = []
-    majors: list[str] = []
-    if (grunt_dir / "uv.lock").exists():
-        uv = [*via_mise, "uv"] if mise else [find_uv() or "uv"]
-        plan = output([*uv, "lock", "--upgrade", "--dry-run"])
-        updates += [f"{n} {a} → {b}" for n, a, b in _UV_UPDATE.findall(plan)]
-    python = grunt_dir / ".venv" / "bin" / "python"
-    if python.exists():
-        apps = output([str(python), "-m", FRAMEWORK_CLI_MODULE, "app", "deps", "--outdated"])
-        updates += [line.strip() for line in apps.splitlines() if " → " in line]
-    if (grunt_dir / "node_modules").is_dir():
+
+    def npm_outdated() -> dict:
         npm = [*via_mise, "npm"] if mise else [shutil.which("npm") or "npm"]
         # npm outdated виходить з кодом 1, коли щось застаріло — дивимось лише на JSON
         try:
-            outdated = json.loads(
+            return json.loads(
                 subprocess.run(
                     [*npm, "outdated", "--json"], cwd=grunt_dir, capture_output=True, text=True
                 ).stdout
                 or "{}"
             )
         except (OSError, ValueError):
-            outdated = {}
-        for name, info in outdated.items():
+            return {}
+
+    uv = [*via_mise, "uv"] if mise else [find_uv() or "uv"]
+    python = grunt_dir / ".venv" / "bin" / "python"
+    # Три незалежні запити до реєстрів пакетів — разом, а не по черзі.
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        plan = (
+            pool.submit(output, [*uv, "lock", "--upgrade", "--dry-run"])
+            if (grunt_dir / "uv.lock").exists()
+            else None
+        )
+        apps = (
+            pool.submit(
+                output, [str(python), "-m", FRAMEWORK_CLI_MODULE, "app", "deps", "--outdated"]
+            )
+            if python.exists()
+            else None
+        )
+        npm = pool.submit(npm_outdated) if (grunt_dir / "node_modules").is_dir() else None
+
+    updates: list[str] = []
+    majors: list[str] = []
+    if plan:
+        updates += [f"{n} {a} → {b}" for n, a, b in _UV_UPDATE.findall(plan.result())]
+    if apps:
+        updates += [line.strip() for line in apps.result().splitlines() if " → " in line]
+    if npm:
+        for name, info in npm.result().items():
             current, wanted, latest = info.get("current"), info.get("wanted"), info.get("latest")
             if not current:
                 continue
@@ -853,7 +910,7 @@ def _ask_upgrade_packages() -> bool:
     return click.confirm("  Оновити uv.lock і package-lock.json (потім закомітити)?", default=True)
 
 
-def _run_npm_install(app_dir: Path, upgrade: bool = False) -> None:
+def _run_npm_install(app_dir: Path, upgrade: bool = False) -> bool:
     """Встановити npm пакети; *upgrade* — ``npm update`` (найновіші в межах
     package.json, з переписаним package-lock.json)."""
     import shutil  # noqa: PLC0415
@@ -865,16 +922,16 @@ def _run_npm_install(app_dir: Path, upgrade: bool = False) -> None:
         npm = shutil.which("npm")
         if not npm:
             console.print("  [yellow]⚠[/yellow]  npm не знайдено")
-            return
+            return False
         npm_run = [npm]
 
     if upgrade:
         status = f"Оновлюю npm пакети ({app_dir.name}, npm update)..."
         if run_captured([*npm_run, "update"], cwd=app_dir, status=status) == 0:
             console.print("  [green]✓[/green] npm пакети оновлені (package-lock.json змінено)")
-            return
+            return True
         console.print("  [yellow]⚠[/yellow]  npm update завершився з помилкою")
-        return
+        return False
 
     status = f"Встановлюю npm пакети ({app_dir.name})..."
     no_lock = [*npm_run, "install", "--no-package-lock"]
@@ -889,12 +946,12 @@ def _run_npm_install(app_dir: Path, upgrade: bool = False) -> None:
         # і наступний git pull конфліктує. Версії пакетів приходять лише з lock-файла.
         if result == 0:
             console.print("  [green]✓[/green] npm пакети встановлені")
-            return
+            return True
         console.print("  [dim]Повторна спроба без package-lock.json...[/dim]")
 
     if run_captured(no_lock, cwd=app_dir, status=status) == 0:
         console.print("  [green]✓[/green] npm пакети встановлені (без package-lock.json)")
-        return
+        return True
 
     # Чиста установка, але старий node_modules відкладаємо, а не видаляємо:
     # якщо й вона впаде, повертаємо його, щоб було з чим зібрати фронтенд.
@@ -907,12 +964,13 @@ def _run_npm_install(app_dir: Path, upgrade: bool = False) -> None:
         if run_captured(no_lock, cwd=app_dir, status=status) == 0:
             shutil.rmtree(backup, ignore_errors=True)
             console.print("  [green]✓[/green] npm пакети встановлені (чиста установка)")
-            return
+            return True
         shutil.rmtree(nm, ignore_errors=True)
         backup.rename(nm)
         console.print("  [dim]Повернуто попередній node_modules[/dim]")
 
     console.print("  [yellow]⚠[/yellow]  npm install завершився з помилкою")
+    return False
 
 
 def _run_migrations(site: str | None) -> bool:
@@ -996,6 +1054,132 @@ def _get_cli_dir() -> Path | None:
     return None
 
 
+# ── Пропуск кроків, де нічого не змінилось ──────────────────────────
+# Після успішного кроку запамʼятовуємо відбиток того, від чого він залежить;
+# наступний запуск із тим самим відбитком крок пропускає. Невдалий крок
+# відбиток не оновлює — його повторить наступний grunt update. Видалити
+# файл (або --full) — пройти всі кроки.
+_STATE_FILE = (
+    Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "grunt/update-state.json"
+)
+_CACHE_PRUNE_EVERY = 7 * 86400
+
+# Від цих файлів залежить, що встановлено: пакети, рантайми, depends_on.
+_DEP_FILES = (
+    "pyproject.toml",
+    "uv.lock",
+    "package.json",
+    "package-lock.json",
+    "mise.toml",
+    "app.json",
+)
+
+
+class _State:
+    """Відбитки, на яких кроки grunt update востаннє пройшли успішно."""
+
+    def __init__(self, full: bool):
+        self.full = full
+        self.skipped = False
+        try:
+            self.data = json.loads(_STATE_FILE.read_text())
+        except (OSError, ValueError):
+            self.data = {}
+
+    def fresh(self, key: str, fingerprint: str | None) -> bool:
+        """Крок *key* уже пройдено на цьому відбитку — його можна пропустити."""
+        if self.full or fingerprint is None or self.data.get(key) != fingerprint:
+            return False
+        self.skipped = True
+        return True
+
+    def due(self, key: str, every: float) -> bool:
+        """Періодичний крок: востаннє був довше ніж *every* секунд тому."""
+        return self.full or time.time() - float(self.data.get(key) or 0) >= every
+
+    def mark(self, key: str, value: str | float | None) -> None:
+        if value is None:
+            return
+        self.data[key] = value
+        try:
+            _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _STATE_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.data, indent=1))
+            tmp.replace(_STATE_FILE)
+        except OSError:
+            pass  # без стану наступний запуск просто пройде всі кроки
+
+
+def _deps_fingerprint(*dirs: Path) -> str:
+    """Відбиток залежностей: вміст _DEP_FILES і наявність .venv/node_modules
+    (видалили node_modules — встановити заново)."""
+    h = hashlib.sha256()
+    for d in dirs:
+        h.update(f"{d}\0{(d / '.venv').is_dir()}{(d / 'node_modules').is_dir()}\0".encode())
+        for name in _DEP_FILES:
+            try:
+                h.update(name.encode() + b"\0" + (d / name).read_bytes() + b"\0")
+            except OSError:
+                h.update(name.encode() + b"\0-\0")
+    return h.hexdigest()
+
+
+def _project_dirs() -> list[Path]:
+    """Фреймворк і всі додатки з apps/."""
+    apps_dir = _find_apps_dir()
+    if apps_dir is None or not apps_dir.is_dir():
+        return []
+    return sorted(p for p in apps_dir.iterdir() if p.is_dir() and not p.name.startswith("."))
+
+
+def _code_fingerprint(dirs: list[Path]) -> str | None:
+    """Відбиток коду: HEAD, незакомічені правки й нові файли кожного репозиторію.
+
+    None — якщо є тека не під git: її зміни не відстежити, крок не пропускаємо.
+    """
+    if not dirs:
+        return None
+    h = hashlib.sha256()
+    for d in dirs:
+        if not (d / ".git").exists():
+            return None
+        head = _git(d, "rev-parse", "HEAD").stdout
+        diff = _git(d, "diff", "HEAD").stdout
+        h.update(f"{d}\0{head}\0{diff}\0".encode())
+        # Нові файли (свіжий DocType у розробці) — за назвою, розміром і часом зміни.
+        untracked = _git(d, "ls-files", "--others", "--exclude-standard", "-z").stdout
+        for name in untracked.split("\0"):
+            try:
+                st = (d / name).stat() if name else None
+            except OSError:
+                st = None
+            if st:
+                h.update(f"{name}\0{st.st_size}\0{st.st_mtime_ns}\0".encode())
+    return h.hexdigest()
+
+
+def _runtime_fingerprint() -> str:
+    """Python фреймворку й Node.js — після їх оновлення сервіси треба перезапустити."""
+    h = hashlib.sha256()
+    apps_dir = _find_apps_dir()
+    exes = [apps_dir / "grunt" / ".venv" / "bin" / "python"] if apps_dir else []
+    mise_bin = get_mise_bin()
+    runtime_dir = _runtime_dir()
+    if mise_bin and runtime_dir:
+        node = subprocess.run(
+            [mise_bin, "which", "node"], cwd=str(runtime_dir), capture_output=True, text=True
+        )
+        if node.returncode == 0 and node.stdout.strip():
+            exes.append(Path(node.stdout.strip()))
+    for exe in exes:
+        try:
+            real = Path(os.path.realpath(exe))
+            h.update(f"{real}\0{real.stat().st_mtime_ns}\0".encode())
+        except OSError:
+            h.update(f"{exe}\0-\0".encode())
+    return h.hexdigest()
+
+
 _COMPONENTS = ("cli", "framework", "apps", "deps")
 
 
@@ -1072,6 +1256,12 @@ _COMPONENTS = ("cli", "framework", "apps", "deps")
     default=False,
     help="Відкотити реліз, навіть якщо в базі вже є його міграції (після відновлення бекапу)",
 )
+@click.option(
+    "--full",
+    is_flag=True,
+    default=False,
+    help="Пройти всі кроки, навіть ті, де з минулого запуску нічого не змінилось",
+)
 @click.option("--site", default=None, help="Назва сайту (для migrate)")
 @click.option(
     "-v", "--verbose", is_flag=True, help="Повний вивід uv/mise/npm/міграцій замість стислого"
@@ -1094,6 +1284,7 @@ def update(
     tag: str | None,
     follow_branch: bool,
     force: bool,
+    full: bool,
     site: str | None,
     verbose: bool,
 ) -> None:
@@ -1112,7 +1303,15 @@ def update(
       6. grunt migrate (Alembic + DocType-таблиці + fixtures)
       7. прод (є systemd-сервіси): mise run build + перезапуск сервісів
       8. прибирання: невикористані версії Python (uv) і mise-інструментів,
-         кеші uv/npm (--keep-old — не чистити)
+         кеші uv/npm раз на тиждень (--keep-old — не чистити)
+
+    \b
+    Кроки, де з минулого успішного запуску нічого не змінилось, пропускаються:
+    встановлення пакетів (ті самі lock-файли, pyproject.toml, mise.toml,
+    app.json), міграції (той самий код фреймворку й додатків), збірка й
+    перезапуск на проді (той самий код і рантайми). git fetch усіх
+    репозиторіїв іде паралельно. --full — пройти всі кроки (напр. після
+    grunt db restore, якщо базу треба домігрувати).
 
     \b
     Версії: на проді (є systemd-сервіси) фреймворк і додатки ставляться на
@@ -1140,6 +1339,7 @@ def update(
       grunt update --upgrade        найновіші версії залежностей (grunt upgrade)
       grunt update --upgrade-packages   розробка: найновіші пакети без питання
       grunt update -v               повний вивід підпроцесів (для діагностики)
+      grunt update --full           не пропускати кроки без змін
 
     \b
     Пакети на проді ставляться рівно за закоміченими lock-файлами: новіші
@@ -1180,6 +1380,8 @@ def update(
             " з релізу фреймворку"
         )
     app_tag = None if tag is None else "latest"
+    # Відкат із --force іде після відновлення бекапу — базу треба мігрувати.
+    state = _State(full=full or force)
 
     # `grunt update cli` == `grunt update --cli` тощо
     update_cli = update_cli or component == "cli"
@@ -1194,6 +1396,23 @@ def update(
 
     console.print("[bold]⚡ Grunt Update[/bold]")
     console.print()
+
+    # ── 0. git fetch усіх репозиторіїв разом ────────────────────────
+    _prefetched.clear()
+    to_fetch: list[tuple[Path, str | None]] = []
+    if (update_all or update_cli) and (cli_dir := _get_cli_dir()):
+        to_fetch.append((cli_dir, None))
+    for d in _project_dirs():
+        if d.name == "grunt" and (update_all or update_framework):
+            to_fetch.append((d, tag))
+        elif d.name != "grunt" and (update_all or update_apps):
+            to_fetch.append((d, app_tag))
+    fetch_plan = []
+    for d, t in to_fetch:
+        if (d / ".git").exists():
+            release = _wants_release(d, tag=t, branch=follow_branch, production=production)
+            fetch_plan.append((d, _TAG_FETCH if release else ()))
+    _prefetch(fetch_plan)
 
     updated_something = False
 
@@ -1210,11 +1429,15 @@ def update(
             if not no_deps:
                 # editable-встановлення підхоплює код і так, а нові залежності
                 # CLI ставить лише перевстановлення (mise-задача install).
+                key, fp = f"cli:{cli_dir}", _deps_fingerprint(cli_dir)
                 status = "Встановлюю grunt-cli (mise run install)..."
-                if run_mise(cli_dir, "install", quiet=True, status=status) and run_mise(
+                if state.fresh(key, fp):
+                    console.print("  [green]✓[/green] grunt-cli: залежності без змін")
+                elif run_mise(cli_dir, "install", quiet=True, status=status) and run_mise(
                     cli_dir, "run", "install", quiet=True, status=status
                 ):
                     console.print("  [green]✓[/green] grunt-cli встановлено")
+                    state.mark(key, fp)
                 else:
                     console.print("  [yellow]⚠[/yellow]  Встановлення grunt-cli не вдалося")
             updated_something = True
@@ -1231,8 +1454,11 @@ def update(
         console.print()
 
     # ── 3. Framework ────────────────────────────────────────────────
-    # Задача фреймворку `deps` уже робить `npm install` — крок 6 тоді не дублює його.
+    # Задача фреймворку `deps` уже робить `uv sync`, `grunt app deps` і
+    # `npm install` — кроки 5 і 6 тоді не дублюють їх.
     framework_deps_done = False
+    # Відбиток додатків, з яким щойно відпрацювала `deps` фреймворку (None — не працювала).
+    apps_fp_at_deps: str | None = None
     if update_all or update_framework:
         console.print("[bold cyan]Фреймворк[/bold cyan]")
         apps_dir = _find_apps_dir()
@@ -1250,7 +1476,19 @@ def update(
                 force=force,
             )
             if not no_deps:
-                framework_deps_done = _install_deps(framework_dir, "grunt")
+                key, fp = f"deps:{framework_dir}", _deps_fingerprint(framework_dir)
+                if state.fresh(key, fp):
+                    console.print("  [green]✓[/green] Пакети grunt: без змін")
+                    framework_deps_done = True
+                else:
+                    result = _install_deps(framework_dir, "grunt")
+                    framework_deps_done = result is True
+                    if framework_deps_done:
+                        apps_fp_at_deps = _deps_fingerprint(
+                            *(d for d in _project_dirs() if d.name != "grunt")
+                        )
+                    if result is not False:
+                        state.mark(key, _deps_fingerprint(framework_dir))
             updated_something = True
         console.print()
 
@@ -1281,7 +1519,13 @@ def update(
                         force=force,
                     )
                     if not no_deps:
-                        _install_deps(app_dir, app_dir.name)
+                        # Без змін — мовчки: рядок «вже актуальний» уже виведено вище.
+                        key, fp = f"deps:{app_dir}", _deps_fingerprint(app_dir)
+                        if (
+                            not state.fresh(key, fp)
+                            and _install_deps(app_dir, app_dir.name) is not False
+                        ):
+                            state.mark(key, _deps_fingerprint(app_dir))
                     updated_something = True
         console.print()
 
@@ -1299,7 +1543,21 @@ def update(
 
     if not skip_packages:
         console.print("[bold cyan]Python пакети[/bold cyan]")
-        _update_python_packages(upgrade=upgrade_packages)
+        project = _project_dirs()
+        key = f"packages:{_find_apps_dir()}"
+        fp = _deps_fingerprint(*project) if project else None
+        apps_fp = _deps_fingerprint(*(d for d in project if d.name != "grunt"))
+        if upgrade_packages:
+            if _update_python_packages(upgrade=True):
+                state.mark(key, _deps_fingerprint(*_project_dirs()))
+        elif state.fresh(key, fp):
+            console.print("  [green]✓[/green] Python пакети: без змін")
+        elif apps_fp_at_deps == apps_fp:
+            # Додатки після `mise run deps` фреймворку не змінились — вона все й поставила.
+            console.print("  [green]✓[/green] Python пакети вже встановлені (mise run deps)")
+            state.mark(key, fp)
+        elif _update_python_packages(upgrade=False):
+            state.mark(key, _deps_fingerprint(*_project_dirs()))
         updated_something = True
         console.print()
     else:
@@ -1310,10 +1568,15 @@ def update(
     if not skip_npm:
         console.print("[bold cyan]npm пакети[/bold cyan]")
         apps_dir = _find_apps_dir()
+        grunt_dir = apps_dir / "grunt" if apps_dir else None
+        key = f"npm:{grunt_dir}"
         if framework_deps_done and not upgrade_packages:
             console.print("  [green]✓[/green] npm пакети вже встановлені (mise run deps)")
-        elif apps_dir and (apps_dir / "grunt").exists():
-            _run_npm_install(apps_dir / "grunt", upgrade=upgrade_packages)
+        elif grunt_dir and grunt_dir.exists():
+            if not upgrade_packages and state.fresh(key, _deps_fingerprint(grunt_dir)):
+                console.print("  [green]✓[/green] npm пакети: без змін")
+            elif _run_npm_install(grunt_dir, upgrade=upgrade_packages):
+                state.mark(key, _deps_fingerprint(grunt_dir))
             updated_something = True
         else:
             console.print("  [dim]Grunt app директорія не знайдена[/dim]")
@@ -1324,9 +1587,27 @@ def update(
 
     # ── 7. Міграція БД ──────────────────────────────────────────────
     migrated = True
+    # Відбиток коду рахуємо після пакетів: npm/uv могли переписати lock-файли.
+    code_fp = _code_fingerprint(_project_dirs())
     if not skip_migrate:
         console.print("[bold cyan]Міграція БД[/bold cyan]")
-        migrated = _run_migrations(site)
+        site_dir = get_current_site()
+        key = f"migrate:{site_dir}:{site or ''}"
+        site_conf = site_dir / "grunt.site" if site_dir else None
+        # Конфіг сайту — у ньому список встановлених додатків.
+        fp = (
+            code_fp
+            and hashlib.sha256(
+                code_fp.encode()
+                + (site_conf.read_bytes() if site_conf and site_conf.is_file() else b"")
+            ).hexdigest()
+        )
+        if state.fresh(key, fp):
+            console.print("  [green]✓[/green] Код не змінився з останньої міграції — пропущено")
+        else:
+            migrated = _run_migrations(site)
+            if migrated:
+                state.mark(key, fp)
         updated_something = True
         console.print()
     else:
@@ -1337,7 +1618,18 @@ def update(
     restarted = True
     if updated_something and not no_restart:
         console.print("[bold cyan]Перезапуск[/bold cyan]")
-        restarted = _restart_production(migrated)
+        key = f"restart:{bench}"
+        fp = None
+        if production and code_fp:
+            fp = hashlib.sha256(f"{code_fp}\0{_runtime_fingerprint()}".encode()).hexdigest()
+        if migrated and state.fresh(key, fp):
+            console.print(
+                "  [green]✓[/green] Код і рантайми не змінились — збірка й перезапуск не потрібні"
+            )
+        else:
+            restarted = _restart_production(migrated)
+            if restarted:
+                state.mark(key, fp)
         console.print()
 
     # ── 9. Прибирання ───────────────────────────────────────────────
@@ -1348,7 +1640,10 @@ def update(
     notes: list[str] = []
     if (update_all or update_deps) and not keep_old:
         console.print("[bold cyan]Прибирання[/bold cyan]")
-        removed, kept, notes = _cleanup_runtimes()
+        prune_caches = state.due("caches", _CACHE_PRUNE_EVERY)
+        removed, kept, notes = _cleanup_runtimes(prune_caches)
+        if prune_caches:
+            state.mark("caches", time.time())
         if not removed and not kept:
             console.print("  [green]✓[/green] Старих версій рантаймів немає")
         console.print()
@@ -1359,6 +1654,10 @@ def update(
     elif restarted:
         console.print("[bold green]✅ Оновлення завершено[/bold green]")
         _print_cleanup_summary(removed, kept, notes)
+        if state.skipped:
+            console.print(
+                "  [dim]Кроки без змін пропущено; виконати все: grunt update --full[/dim]"
+            )
     else:
         console.print("[bold red]✗ Оновлення завершено з помилками[/bold red]")
         raise SystemExit(1)

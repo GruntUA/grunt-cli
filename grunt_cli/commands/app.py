@@ -8,6 +8,7 @@ from pathlib import Path
 import click
 
 from grunt_cli.helpers import (
+    FrameworkGroup,
     console,
     get_apps_dir,
     get_bench_dir,
@@ -37,9 +38,14 @@ def _load_app_meta(app_dir: Path) -> dict | None:
     return None
 
 
-@click.group()
+@click.group(cls=FrameworkGroup)
 def app() -> None:
-    """Команди для управління Grunt-додатками."""
+    """Команди для управління Grunt-додатками.
+
+    \b
+    Решту команд (remove, deps, doctor) виконує CLI фреймворку:
+      grunt app remove NAME     прибрати додаток з диску (у archive/apps/)
+    """
 
 
 @app.command("create")

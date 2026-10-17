@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import click
 from rich.console import Console
 from rich.markup import escape
 
@@ -558,3 +559,39 @@ def find_uv() -> str | None:
             if c.exists():
                 return str(c)
     return uv_bin
+
+
+class FrameworkGroup(click.Group):
+    """Підкоманди, яких немає в grunt-cli, передає CLI фреймворку проєкту
+    (``apps/grunt/.venv/bin/grunt``) під тим самим шляхом: ``grunt data export``,
+    ``grunt app remove`` тощо."""
+
+    def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
+        command = super().get_command(ctx, cmd_name)
+        if command is not None:
+            return command
+        framework_cli = get_venv_grunt()
+        if framework_cli is None:
+            return None
+
+        # Шлях групи без кореня: [] для `grunt`, ["app"] для `grunt app`
+        prefix: list[str] = []
+        node: click.Context | None = ctx
+        while node is not None and node.parent is not None:
+            prefix.insert(0, node.info_name or "")
+            node = node.parent
+
+        @click.command(
+            cmd_name,
+            add_help_option=False,
+            context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+        )
+        @click.argument("args", nargs=-1, type=click.UNPROCESSED)
+        def _framework_command(args: tuple[str, ...]) -> None:
+            env = {**os.environ}
+            if dotenv := get_dotenv_path():
+                env["DOTENV_PATH"] = dotenv
+            result = subprocess.run([*framework_cli, *prefix, cmd_name, *args], env=env)
+            raise SystemExit(result.returncode)
+
+        return _framework_command

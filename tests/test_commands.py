@@ -593,6 +593,39 @@ class TestUpdate:
         assert result.exit_code == 0, result.output
         assert order == ["runtimes", "deps grunt"]
 
+    @patch("grunt_cli.commands.update._restart_production", return_value=True)
+    @patch("grunt_cli.commands.update._run_migrations", return_value=True)
+    @patch("grunt_cli.commands.update._run_npm_install")
+    @patch("grunt_cli.commands.update._update_python_packages")
+    @patch("grunt_cli.commands.update._update_runtimes")
+    @patch("grunt_cli.commands.update._update_repo")
+    @patch("grunt_cli.commands.update._get_cli_dir", return_value=None)
+    def test_unchanged_deps_are_not_reinstalled(
+        self, _cli, _repo, _runtimes, mock_packages, _npm, _migrate, _restart, runner, tmp_path
+    ):
+        from grunt_cli.commands import update
+
+        framework = tmp_path / "apps" / "grunt"
+        framework.mkdir(parents=True)
+        (framework / "uv.lock").write_text("v1")
+        installs = []
+        with (
+            patch.object(update, "_find_apps_dir", return_value=tmp_path / "apps"),
+            patch.object(update, "_install_deps", lambda p, label: installs.append(label) or True),
+        ):
+            assert runner.invoke(cli, ["update", "--framework"]).exit_code == 0
+            result = runner.invoke(cli, ["update", "--framework"])
+            assert result.exit_code == 0, result.output
+            assert "Пакети grunt: без змін" in result.output
+            assert installs == ["grunt"]
+
+            (framework / "uv.lock").write_text("v2")
+            assert runner.invoke(cli, ["update", "--framework"]).exit_code == 0
+            assert installs == ["grunt", "grunt"]
+
+        # `mise run deps` фреймворку вже зробила uv sync і grunt app deps.
+        mock_packages.assert_not_called()
+
     @patch("grunt_cli.commands.update.subprocess.run")
     @patch("grunt_cli.commands.update._get_cli_dir")
     @patch("grunt_cli.commands.update._find_apps_dir", return_value=None)
@@ -715,6 +748,33 @@ class TestUpdateRestart:
         result = self._run(runner, "--no-restart")
         assert result.exit_code == 0, result.output
         mock_restart.assert_not_called()
+
+    @patch("grunt_cli.commands.update.restart_units", return_value=True)
+    @patch("grunt_cli.commands.update.run_mise", return_value=True)
+    @patch("grunt_cli.commands.update._run_migrations", return_value=True)
+    def test_unchanged_code_skips_migrate_and_restart(
+        self, mock_migrate, _mise, mock_restart, runner, tmp_path, monkeypatch
+    ):
+        bench = self._bench(tmp_path, monkeypatch, ("mlt_prod-web.service",))
+        framework = bench / "apps" / "grunt"
+        git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(framework)]
+        subprocess.run([*git, "init", "-q"], check=True)
+        subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "a"], check=True)
+
+        assert self._run(runner).exit_code == 0
+        result = self._run(runner)
+        assert result.exit_code == 0, result.output
+        assert "Код не змінився" in result.output
+        assert "перезапуск не потрібні" in result.output
+        assert (mock_migrate.call_count, mock_restart.call_count) == (1, 1)
+
+        # Новий файл у коді — знову мігруємо й перезапускаємо.
+        (framework / "new_doctype.json").write_text("{}")
+        assert self._run(runner).exit_code == 0
+        assert (mock_migrate.call_count, mock_restart.call_count) == (2, 2)
+
+        assert self._run(runner, "--full").exit_code == 0
+        assert (mock_migrate.call_count, mock_restart.call_count) == (3, 3)
 
     @patch("grunt_cli.commands.update.venv_delegate", return_value=0)
     def test_migrations_run_full_framework_migrate(self, mock_delegate, tmp_path, monkeypatch):
@@ -949,6 +1009,23 @@ class TestGitPull:
         fetch_head.write_text(fetch_head.read_text() * 2)
 
         assert _git_pull(wc, "wc") is True
+        head = subprocess.run(
+            ["git", "-C", str(wc), "rev-parse", "HEAD"], capture_output=True, text=True
+        ).stdout
+        up_head = subprocess.run(
+            ["git", "-C", str(upstream), "rev-parse", "HEAD"], capture_output=True, text=True
+        ).stdout
+        assert head == up_head
+
+    def test_prefetched_repo_is_not_fetched_again(self, tmp_path):
+        from grunt_cli.commands import update
+
+        upstream, wc = self._repo(tmp_path)
+        update._prefetched.clear()
+        update._prefetch([(wc, ())])
+        with patch.object(update, "_git_fetch") as mock_fetch:
+            assert update._git_pull(wc, "wc") is True
+        mock_fetch.assert_not_called()
         head = subprocess.run(
             ["git", "-C", str(wc), "rev-parse", "HEAD"], capture_output=True, text=True
         ).stdout
@@ -1587,12 +1664,12 @@ class TestUpgrade:
 
         pyproject = tmp_path / "pyproject.toml"
         pyproject.write_text(
-            '[project]\n'
-            'dependencies = [\n'
+            "[project]\n"
+            "dependencies = [\n"
             '    "fastapi>=0.111.0",\n'
             '    "uvicorn[standard]>=0.29.0",  # server\n'
             '    "click>=8.1.0",\n'
-            ']\n'
+            "]\n"
         )
 
         locked = {
@@ -1615,12 +1692,7 @@ class TestUpgrade:
         from grunt_cli.commands.upgrade import _update_mise_toml
 
         mise_file = tmp_path / "mise.toml"
-        mise_file.write_text(
-            '[tools]\n'
-            'node = "24"\n'
-            'python = "3.14"\n'
-            'uv = "latest"\n'
-        )
+        mise_file.write_text('[tools]\nnode = "24"\npython = "3.14"\nuv = "latest"\n')
 
         changes = _update_mise_toml(mise_file, node_ver="26", python_ver="3.15", dry_run=False)
         assert len(changes) == 2
@@ -1650,4 +1722,3 @@ class TestUpgrade:
         mock_node.assert_called_once_with(dry_run=True)
         mock_py.assert_called_once_with(dry_run=True)
         mock_cli.assert_called_once_with(dry_run=True)
-

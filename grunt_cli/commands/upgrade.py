@@ -497,9 +497,7 @@ def _upgrade_python_packages(dry_run: bool = False) -> None:
                         app_changes = _update_pyproject_deps(pyproject, installed, dry_run=dry_run)
                         if app_changes:
                             n_chg = len(app_changes)
-                            console.print(
-                                f"  [green]✓[/green] {app_dir.name}: оновлено {n_chg}"
-                            )
+                            console.print(f"  [green]✓[/green] {app_dir.name}: оновлено {n_chg}")
 
 
 def _upgrade_cli_itself(dry_run: bool = False) -> None:
