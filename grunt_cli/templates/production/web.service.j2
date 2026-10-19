@@ -9,8 +9,8 @@ User={{ user }}
 WorkingDirectory={{ grunt_dir }}
 Environment=DOTENV_PATH={{ env_file }}
 Environment=PATH={{ grunt_dir }}/.venv/bin:/usr/local/bin:/usr/bin:/bin
-# Один процес: планувальник (APScheduler) працює в кожному процесі uvicorn.
-ExecStart={{ grunt_dir }}/.venv/bin/uvicorn grunt.main:app --host 127.0.0.1 --port {{ port }} --proxy-headers --forwarded-allow-ips 127.0.0.1
+# Кілька процесів ділять Redis: кеші, rate limit, присутність; cron запускає лише лідер.
+ExecStart={{ grunt_dir }}/.venv/bin/uvicorn grunt.main:app --host 127.0.0.1 --port {{ port }} --proxy-headers --forwarded-allow-ips 127.0.0.1{% if web_workers > 1 %} --workers {{ web_workers }}{% endif %}
 Restart=always
 RestartSec=3
 

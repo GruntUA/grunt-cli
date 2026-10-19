@@ -26,9 +26,24 @@ def bench(tmp_path, monkeypatch):
     return root
 
 
-def _run(answers: str):
+def _run(answers: str, *args: str):
     with patch("grunt_cli.commands.setup.run_mise", return_value=True):
-        return CliRunner().invoke(cli, ["setup", "production"], input=answers)
+        return CliRunner().invoke(cli, ["setup", "production", *args], input=answers)
+
+
+def _leader_aware(bench):
+    """Фреймворк, у якому cron запускає лише процес-лідер."""
+    tasks = bench / "apps" / "grunt" / "grunt" / "tasks"
+    tasks.mkdir(parents=True)
+    (tasks / "scheduler.py").write_text('LEADER_KEY = "grunt:scheduler:leader"\n')
+
+
+def _units(bench) -> tuple[str, str]:
+    config = bench / "config" / "production"
+    return (
+        (config / "mlt_prod-web.service").read_text(),
+        (config / "mlt_prod-worker.service").read_text(),
+    )
 
 
 def test_writes_env_and_configs_without_installing(bench):
@@ -57,6 +72,32 @@ def test_writes_env_and_configs_without_installing(bench):
     assert "--port 8000 --proxy-headers --forwarded-allow-ips 127.0.0.1" in web
     assert "--workers" not in web
     assert "taskiq worker" in (config / "mlt_prod-worker.service").read_text()
+
+
+def test_web_runs_a_process_per_core(bench):
+    _leader_aware(bench)
+    with patch("grunt_cli.commands.setup.os.cpu_count", return_value=16):
+        result = _run("\n\n\n\nn\n")
+    assert result.exit_code == 0, result.output
+    web, worker = _units(bench)
+    assert "--forwarded-allow-ips 127.0.0.1 --workers 4\n" in web  # не більше 4
+    assert "--workers 1\n" in worker
+
+
+def test_worker_counts_from_options(bench):
+    _leader_aware(bench)
+    result = _run("\n\n\n\nn\n", "--web-workers", "3", "--task-workers", "2")
+    assert result.exit_code == 0, result.output
+    web, worker = _units(bench)
+    assert "--workers 3\n" in web
+    assert "--workers 2\n" in worker
+
+
+def test_old_framework_keeps_one_web_process(bench):
+    result = _run("\n\n\n\nn\n", "--web-workers", "3")
+    assert result.exit_code == 0, result.output
+    assert "--workers" not in _units(bench)[0]
+    assert "одним процесом" in result.output
 
 
 def test_origin_certificate_enables_https(bench, tmp_path):

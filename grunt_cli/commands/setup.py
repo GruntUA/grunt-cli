@@ -5,6 +5,7 @@ from __future__ import annotations
 import getpass
 import ipaddress
 import json
+import os
 import re
 import secrets
 import shutil
@@ -44,6 +45,30 @@ CLOUDFLARE_RANGES = (
     "2c0f:f248::/32",
 )
 
+# Більше uvicorn-процесів на SQLite не прискорюють: записи однаково йдуть по черзі.
+_MAX_AUTO_WORKERS = 4
+
+
+def _supports_workers(grunt_dir: Path) -> bool:
+    """Чи фреймворк витримує кілька веб-процесів: лише один із них запускає
+    планувальник (Redis-ключ лідера). Старіший запускав його в кожному процесі."""
+    scheduler = grunt_dir / "grunt" / "tasks" / "scheduler.py"
+    return scheduler.exists() and "LEADER_KEY" in scheduler.read_text()
+
+
+def _web_workers(requested: int | None, grunt_dir: Path) -> int:
+    if not _supports_workers(grunt_dir):
+        if requested and requested > 1:
+            console.print(
+                "[yellow]![/yellow] Ця версія фреймворку запускає планувальник у кожному "
+                "процесі — веб працюватиме одним процесом. Оновіть фреймворк."
+            )
+        return 1
+    if requested:
+        return requested
+    return max(1, min(os.cpu_count() or 1, _MAX_AUTO_WORKERS))
+
+
 _PLACEHOLDER_SECRETS = {"", "change-me", "change-me-to-a-random-64-char-string"}
 
 _templates = Environment(
@@ -60,11 +85,24 @@ def setup() -> None:
 @setup.command("production")
 @click.option("--site", default=None, help="Сайт (за замовчуванням — активний)")
 @click.option("--port", default=8000, show_default=True, help="Порт uvicorn (лише 127.0.0.1)")
-def production(site: str | None, port: int) -> None:
+@click.option(
+    "--web-workers",
+    type=click.IntRange(min=1),
+    default=None,
+    help=f"Процесів uvicorn (за замовчуванням — ядра CPU, не більше {_MAX_AUTO_WORKERS})",
+)
+@click.option(
+    "--task-workers",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Процесів taskiq для фонових задач",
+)
+def production(site: str | None, port: int, web_workers: int | None, task_workers: int) -> None:
     """Продакшн: prod-значення в .env, збірка фронту, systemd-сервіси й nginx.
 
     \b
-    Сервіси: <bench>-web (uvicorn, один процес) і <bench>-worker (taskiq).
+    Сервіси: <bench>-web (uvicorn, процес на ядро CPU) і <bench>-worker (taskiq).
     nginx приймає трафік від Cloudflare і бере справжній IP відвідувача
     з CF-Connecting-IP лише для адрес Cloudflare.
     Спершу все генерується в <bench>/config/production/, і лише потім
@@ -155,6 +193,8 @@ def production(site: str | None, port: int) -> None:
         "site": site_dir.name,
         "server_names": " ".join([domain, *extra]),
         "port": port,
+        "web_workers": _web_workers(web_workers, grunt_dir),
+        "task_workers": task_workers,
         "user": getpass.getuser(),
         "grunt_dir": grunt_dir,
         "env_file": env_file,

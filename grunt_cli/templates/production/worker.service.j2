@@ -9,7 +9,7 @@ User={{ user }}
 WorkingDirectory={{ grunt_dir }}
 Environment=DOTENV_PATH={{ env_file }}
 Environment=PATH={{ grunt_dir }}/.venv/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart={{ grunt_dir }}/.venv/bin/taskiq worker grunt.tasks.worker:broker --workers 1
+ExecStart={{ grunt_dir }}/.venv/bin/taskiq worker grunt.tasks.worker:broker --workers {{ task_workers }}
 Restart=always
 RestartSec=3
 
