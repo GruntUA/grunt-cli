@@ -15,6 +15,15 @@ def _no_real_cleanup(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_os_check(request, monkeypatch):
+    """`grunt update` asks apt (and sudo) about OS updates — never from a test
+    (TestOsUpdates opts in and fakes the commands)."""
+    if request.node.get_closest_marker("real_os_check"):
+        return
+    monkeypatch.setattr("grunt_cli.commands.update._check_os_updates", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def _update_state(tmp_path, monkeypatch):
     """Відбитки пропущених кроків `grunt update` — у тимчасовій теці тесту,
     не в ~/.cache користувача."""
@@ -25,3 +34,4 @@ def _update_state(tmp_path, monkeypatch):
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "real_cleanup: run _cleanup_runtimes unpatched")
+    config.addinivalue_line("markers", "real_os_check: run _check_os_updates unpatched")

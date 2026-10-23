@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -447,6 +448,99 @@ def _update_runtimes() -> None:
 
     if os.access(_MANAGED_RCLONE, os.X_OK):
         _step([str(_MANAGED_RCLONE), "selfupdate"], "rclone оновлено", quiet=True)
+
+
+_APT_LISTS = Path("/var/lib/apt/lists")
+_REBOOT_REQUIRED = Path("/var/run/reboot-required")
+_OS_LIST_MAX = 8
+
+
+def _apt_refresh() -> bool:
+    """`apt-get update`: через sudo без пароля, якщо можна; у терміналі — спитавши пароль.
+
+    Без терміналу й без sudo без пароля списки не оновлюються — перелік
+    тоді за тими, що вже є (unattended-upgrades/apt-daily оновлюють їх щодня)."""
+    cmd = ["apt-get", "update", "-qq"]
+    if os.geteuid() == 0:
+        attempts = [cmd]
+    else:
+        attempts = [["sudo", "-n", *cmd]]
+        if _interactive():
+            attempts.append(["sudo", "-p", "  [sudo] пароль для apt-get update: ", *cmd])
+    for attempt in attempts:
+        # sudo питає пароль через /dev/tty, тож вивід можна забирати.
+        result = subprocess.run(attempt, capture_output=True, text=True, check=False)
+        if result.returncode == 0:
+            return True
+    return False
+
+
+def _apt_lists_age() -> str | None:
+    """Скільки тому оновлювались списки пакетів (за найновішим *Release)."""
+    stamps = [p.stat().st_mtime for p in _APT_LISTS.glob("*Release")]
+    if not stamps:
+        return None
+    hours = int((time.time() - max(stamps)) // 3600)
+    return f"{hours // 24} д" if hours >= 48 else f"{hours} год"
+
+
+def _apt_upgradable() -> list[tuple[str, bool]]:
+    """Пакети ОС, які можна оновити: (назва, чи з репозиторію безпекових оновлень).
+
+    Рядок `apt list --upgradable`:
+    ``openssl/trixie-security 3.5.1-1+deb13u1 amd64 [upgradable from: 3.5.1-1]``"""
+    result = subprocess.run(
+        ["apt", "list", "--upgradable"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "LANG": "C", "LC_ALL": "C"},
+    )
+    packages = []
+    for line in result.stdout.splitlines():
+        if "[upgradable from:" not in line or "/" not in line:
+            continue
+        name, rest = line.split("/", 1)
+        origins = rest.split(" ", 1)[0]
+        packages.append((name, any(o.endswith("-security") for o in origins.split(","))))
+    return packages
+
+
+def _check_os_updates() -> None:
+    """Перевірити оновлення пакетів ОС (Debian/Ubuntu) — лише показати, не ставити.
+
+    Оновлення ОС зачіпає не лише Ґрунт (ядро, OpenSSL, PostgreSQL, Redis),
+    тож `sudo apt upgrade` адміністратор запускає сам, коли зручно."""
+    if not shutil.which("apt-get"):
+        console.print("  [dim]apt не знайдено — оновлення ОС не перевіряю[/dim]")
+        return
+    with console.status("  Оновлюю списки пакетів ОС (apt-get update)..."):
+        refreshed = _apt_refresh()
+    if refreshed:
+        console.print("  [green]✓[/green] Списки пакетів ОС оновлено")
+    else:
+        age = _apt_lists_age()
+        console.print(
+            "  [yellow]⚠[/yellow]  apt-get update потребує sudo — перевіряю за наявними"
+            f" списками{f' (оновлені {age} тому)' if age else ''}"
+        )
+
+    packages = _apt_upgradable()
+    if not packages:
+        console.print("  [green]✓[/green] Пакети ОС актуальні")
+    else:
+        security = [name for name, is_security in packages if is_security]
+        names = security + [name for name, is_security in packages if not is_security]
+        shown = ", ".join(names[:_OS_LIST_MAX])
+        more = f" і ще {len(names) - _OS_LIST_MAX}" if len(names) > _OS_LIST_MAX else ""
+        mark = "[red]✗[/red]" if security else "[yellow]⚠[/yellow] "
+        of_them = f", з них безпекових: {len(security)}" if security else ""
+        console.print(
+            f"  {mark} Можна оновити пакетів ОС: {len(packages)}{of_them} — sudo apt upgrade"
+        )
+        console.print(f"    [dim]{shown}{more}[/dim]")
+    if _REBOOT_REQUIRED.exists():
+        console.print("  [yellow]⚠[/yellow]  Після оновлення ОС потрібне перезавантаження сервера")
 
 
 def _in_use() -> dict[str, list[str]]:
@@ -1318,6 +1412,7 @@ _COMPONENTS = ("cli", "framework", "apps", "deps")
     default=False,
     help="Розробка: не перевіряти й не пропонувати новіші версії пакетів",
 )
+@click.option("--skip-os", is_flag=True, default=False, help="Не перевіряти оновлення ОС (apt)")
 @click.option("--skip-packages", is_flag=True, default=False, help="Не оновлювати Python пакети")
 @click.option("--skip-npm", is_flag=True, default=False, help="Не встановлювати npm пакети")
 @click.option("--skip-migrate", is_flag=True, default=False, help="Не запускати міграції БД")
@@ -1377,6 +1472,7 @@ def update(
     do_upgrade: bool,
     upgrade_packages: bool,
     no_upgrade_packages: bool,
+    skip_os: bool,
     skip_packages: bool,
     skip_npm: bool,
     skip_migrate: bool,
@@ -1395,17 +1491,20 @@ def update(
     \b
     Послідовність:
       1. git fetch + rebase для CLI
-      2. mise self-update, mise install + upgrade (Node.js, uv у межах mise.toml),
+      2. ОС (Debian/Ubuntu): apt-get update і перелік пакетів, які можна
+         оновити (безпекові — першими), та чи треба перезавантаження. Лише
+         перевірка: sudo apt upgrade — вручну (--skip-os — не перевіряти)
+      3. mise self-update, mise install + upgrade (Node.js, uv у межах mise.toml),
          uv python upgrade (патч Python), rclone selfupdate — до залежностей
          фреймворку, щоб venv створював уже новий uv
-      3. git fetch + rebase для фреймворку та додатків (+ mise run deps)
-      4. uv sync --locked --inexact + grunt app deps (клонує відсутні додатки з
+      4. git fetch + rebase для фреймворку та додатків (+ mise run deps)
+      5. uv sync --locked --inexact + grunt app deps (клонує відсутні додатки з
          depends_on, ставить Python пакети фреймворку й додатків) +
          playwright install --only-shell chromium (Chromium для PDF)
-      5. npm install
-      6. grunt migrate (Alembic + DocType-таблиці + fixtures)
-      7. прод (є systemd-сервіси): mise run build + перезапуск сервісів
-      8. прибирання: невикористані версії Python (uv) і mise-інструментів,
+      6. npm install
+      7. grunt migrate (Alembic + DocType-таблиці + fixtures)
+      8. прод (є systemd-сервіси): mise run build + перезапуск сервісів
+      9. прибирання: невикористані версії Python (uv) і mise-інструментів,
          кеші uv/npm раз на тиждень (--keep-old — не чистити)
 
     \b
@@ -1431,7 +1530,8 @@ def update(
       grunt update                  оновити все
       grunt update cli              оновити тільки сам grunt-cli
       grunt update framework        тільки фреймворк (+ пакети, npm, міграції)
-      grunt update --deps           оновити тільки системні залежності
+      grunt update --deps           оновити тільки системні залежності (+ перевірка ОС)
+      grunt update --skip-os        без перевірки оновлень ОС
       grunt update --apps           тільки додатки + пакети + міграції
       grunt update --skip-migrate   без міграцій БД
       grunt update --no-restart     без збірки фронтенду й перезапуску (прод)
@@ -1544,6 +1644,12 @@ def update(
                 else:
                     console.print("  [yellow]⚠[/yellow]  Встановлення grunt-cli не вдалося")
             updated_something = True
+        console.print()
+
+    # ── 1a. Операційна система (лише перевірка) ────────────────────
+    if (update_all or update_deps) and not skip_os:
+        console.print("[bold cyan]Операційна система[/bold cyan]")
+        _check_os_updates()
         console.print()
 
     # ── 2. Системні залежності (рантайми) ────────────────────────

@@ -527,6 +527,70 @@ class TestSites:
 # ── grunt update ────────────────────────────────────────────────
 
 
+_UPGRADABLE = """Listing...
+openssl/trixie-security 3.5.1-1+deb13u1 amd64 [upgradable from: 3.5.1-1]
+curl/trixie 8.14.1-2 amd64 [upgradable from: 8.14.1-1]
+libssl3t64/trixie-security,trixie 3.5.1-1+deb13u1 amd64 [upgradable from: 3.5.1-1]
+"""
+
+
+@pytest.mark.real_os_check
+class TestOsUpdates:
+    def _fake_run(self, calls, *, sudo_ok=True, listing=_UPGRADABLE):
+        def run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd[0] == "apt":
+                return subprocess.CompletedProcess(cmd, 0, listing, "")
+            return subprocess.CompletedProcess(cmd, 0 if sudo_ok else 1, "", "")
+
+        return run
+
+    def _check(self, monkeypatch, tmp_path, *, interactive=False, **fake):
+        from grunt_cli.commands import update
+
+        calls = []
+        monkeypatch.setattr(update.shutil, "which", lambda name: f"/usr/bin/{name}")
+        monkeypatch.setattr(update.os, "geteuid", lambda: 1000)
+        monkeypatch.setattr(update.subprocess, "run", self._fake_run(calls, **fake))
+        monkeypatch.setattr(update, "_interactive", lambda: interactive)
+        monkeypatch.setattr(update, "_APT_LISTS", tmp_path)
+        monkeypatch.setattr(update, "_REBOOT_REQUIRED", tmp_path / "reboot-required")
+        with update.console.capture() as out:
+            update._check_os_updates()
+        return calls, " ".join(out.get().split())  # the console wraps long lines
+
+    def test_upgradable_security_first(self, monkeypatch, tmp_path):
+        calls, out = self._check(monkeypatch, tmp_path)
+        assert calls[0] == ["sudo", "-n", "apt-get", "update", "-qq"]
+        assert "Списки пакетів ОС оновлено" in out
+        assert "Можна оновити пакетів ОС: 3, з них безпекових: 2 — sudo apt upgrade" in out
+        assert "openssl, libssl3t64, curl" in out
+
+    def test_without_sudo_uses_existing_lists(self, monkeypatch, tmp_path):
+        (tmp_path / "deb.debian.org_dists_trixie_InRelease").touch()
+        calls, out = self._check(monkeypatch, tmp_path, sudo_ok=False, listing="Listing...\n")
+        assert [c[:2] for c in calls] == [["sudo", "-n"], ["apt", "list"]]  # no password prompt
+        assert "потребує sudo" in out and "оновлені 0 год тому" in out
+        assert "Пакети ОС актуальні" in out
+
+    def test_terminal_asks_for_the_password(self, monkeypatch, tmp_path):
+        calls, _ = self._check(monkeypatch, tmp_path, interactive=True, sudo_ok=False)
+        assert calls[1][:2] == ["sudo", "-p"] and calls[1][-3:] == ["apt-get", "update", "-qq"]
+
+    def test_reboot_required(self, monkeypatch, tmp_path):
+        (tmp_path / "reboot-required").touch()
+        _, out = self._check(monkeypatch, tmp_path, listing="")
+        assert "потрібне перезавантаження" in out
+
+    def test_no_apt(self, monkeypatch):
+        from grunt_cli.commands import update
+
+        monkeypatch.setattr(update.shutil, "which", lambda name: None)
+        with update.console.capture() as out:
+            update._check_os_updates()
+        assert "apt не знайдено" in out.get()
+
+
 class TestUpdate:
     def test_pdf_browser_installed_with_venv_python(self, tmp_path):
         from grunt_cli.commands import update
