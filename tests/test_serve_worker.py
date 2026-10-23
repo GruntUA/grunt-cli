@@ -3,21 +3,28 @@
 from grunt_cli.commands.serve import _redis_configured
 
 
-def test_redis_from_environment():
-    assert _redis_configured({"REDIS_URL": "redis://localhost:6379/0"})
+def test_redis_from_environment(tmp_path):
+    assert _redis_configured({"REDIS_URL": "redis://localhost:6379/0"}, tmp_path)
 
 
 def test_redis_from_site_dotenv(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text("DEBUG=true\nREDIS_URL=redis://localhost:6379/0\n")
-    assert _redis_configured({"DOTENV_PATH": str(env_file)})
+    assert _redis_configured({"DOTENV_PATH": str(env_file)}, tmp_path / "grunt")
+
+
+def test_redis_from_grunt_dotenv(tmp_path):
+    """No site .env (several sites, serve not started in one) - the backend reads
+    grunt/.env, so the worker check must too."""
+    (tmp_path / ".env").write_text("REDIS_URL=redis://localhost:6379/0\n")
+    assert _redis_configured({}, tmp_path)
 
 
 def test_no_redis(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text("DEBUG=true\nREDIS_URL=\n")
-    assert not _redis_configured({"DOTENV_PATH": str(env_file)})
-    assert not _redis_configured({})
+    assert not _redis_configured({"DOTENV_PATH": str(env_file)}, tmp_path)
+    assert not _redis_configured({}, tmp_path / "grunt")
 
 
 def test_stopped_old_supervisor_is_taken_over(tmp_path):

@@ -323,7 +323,7 @@ def _serve_bench(
         )
 
         # Tasks go to Redis when the site has REDIS_URL — someone has to take them.
-        if _redis_configured(backend_env):
+        if _redis_configured(backend_env, grunt_dir):
             console.print("[green]▶[/green] Worker:   TaskIQ [dim](Redis)[/dim]")
             procs.append(
                 run_mise_popen(
@@ -351,14 +351,15 @@ def _sites_label(n: int) -> str:
     return f"{n} {word}"
 
 
-def _redis_configured(env: dict[str, str]) -> bool:
-    """True when the backend will use a Redis broker (REDIS_URL in env or the site .env)."""
+def _redis_configured(env: dict[str, str], grunt_dir: Path) -> bool:
+    """True when the backend will use a Redis broker (REDIS_URL in env or the .env it reads)."""
     if env.get("REDIS_URL"):
         return True
-    dotenv = env.get("DOTENV_PATH")
-    if not dotenv or not Path(dotenv).exists():
+    # Without DOTENV_PATH grunt.config falls back to ".env" in its cwd - grunt_dir.
+    dotenv = Path(env.get("DOTENV_PATH") or grunt_dir / ".env")
+    if not dotenv.exists():
         return False
-    for line in Path(dotenv).read_text(encoding="utf-8").splitlines():
+    for line in dotenv.read_text(encoding="utf-8").splitlines():
         key, _, value = line.partition("=")
         if key.strip() == "REDIS_URL" and value.strip().strip("'\""):
             return True
