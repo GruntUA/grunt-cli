@@ -1371,8 +1371,15 @@ class TestAskUpgradePackages:
 
     @staticmethod
     def _run(
-        runner, tmp_path, monkeypatch, *args, outdated=("aiohttp 3.14.4 → 3.14.5",), answer="y"
+        runner,
+        tmp_path,
+        monkeypatch,
+        *args,
+        outdated=None,
+        answer="y",
     ):
+        if outdated is None:
+            outdated = {"python": ["aiohttp 3.14.4 → 3.14.5"]}
         bench = tmp_path / "dev"
         (bench / "apps" / "grunt").mkdir(parents=True)
         (bench / "sites").mkdir()
@@ -1384,10 +1391,10 @@ class TestAskUpgradePackages:
         with (
             patch(
                 "grunt_cli.commands.update._outdated_packages",
-                return_value=(list(outdated), ["vitest 4.1.11 → 5.0.4"]),
+                return_value=(outdated, ["vitest 4.1.11 → 5.0.4"]),
             ),
             patch("grunt_cli.commands.update._update_python_packages") as packages,
-            patch("grunt_cli.commands.update._run_npm_install"),
+            patch("grunt_cli.commands.update._run_npm_install") as npm,
             patch("grunt_cli.commands.update._run_migrations", return_value=True),
             patch("grunt_cli.commands.update._get_cli_dir", return_value=None),
             patch("grunt_cli.commands.update._git_pull", return_value=True),
@@ -1395,6 +1402,7 @@ class TestAskUpgradePackages:
             result = runner.invoke(
                 cli, ["update", "--framework", "--no-deps", *args], input=f"{answer}\n"
             )
+        result.npm = npm
         return result, packages
 
     def test_asks_and_upgrades(self, runner, tmp_path, monkeypatch):
@@ -1402,7 +1410,22 @@ class TestAskUpgradePackages:
         assert result.exit_code == 0, result.output
         assert "aiohttp 3.14.4 → 3.14.5" in result.output
         assert "vitest 4.1.11 → 5.0.4" in result.output  # мажорна — лише для довідки
+        assert "Python — фреймворк (uv.lock)" in result.output
+        assert "Оновити uv.lock (потім" in result.output
         packages.assert_called_once_with(upgrade=True)
+        # у npm новіших немає — його не оновлюємо
+        assert all(not c.kwargs.get("upgrade") for c in result.npm.call_args_list)
+
+    def test_only_npm_outdated(self, runner, tmp_path, monkeypatch):
+        result, packages = self._run(
+            runner, tmp_path, monkeypatch, outdated={"npm": ["vue 3.5.1 → 3.5.4"]}
+        )
+        assert result.exit_code == 0, result.output
+        assert "Node.js — npm (package-lock.json)" in result.output
+        assert "Оновити package-lock.json" in result.output
+        packages.assert_called_once_with(upgrade=False)
+        result.npm.assert_called_once()
+        assert result.npm.call_args.kwargs == {"upgrade": True}
 
     def test_declined(self, runner, tmp_path, monkeypatch):
         result, packages = self._run(runner, tmp_path, monkeypatch, answer="n")
@@ -1410,7 +1433,7 @@ class TestAskUpgradePackages:
         packages.assert_called_once_with(upgrade=False)
 
     def test_nothing_outdated_no_question(self, runner, tmp_path, monkeypatch):
-        result, packages = self._run(runner, tmp_path, monkeypatch, outdated=())
+        result, packages = self._run(runner, tmp_path, monkeypatch, outdated={})
         assert "найновіших версій" in result.output
         assert "Оновити uv.lock" not in result.output
         packages.assert_called_once_with(upgrade=False)
@@ -1421,6 +1444,56 @@ class TestAskUpgradePackages:
         assert result.exit_code == 0, result.output
         ask.assert_not_called()
         packages.assert_called_once_with(upgrade=False)
+
+
+class TestDepsFingerprint:
+    """Пакети перевстановлюються, лише коли змінилось те, від чого вони залежать."""
+
+    @staticmethod
+    def _fp(d):
+        from grunt_cli.commands.update import _deps_fingerprint
+
+        return _deps_fingerprint(d)
+
+    def test_metadata_does_not_count(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text(
+            '[project]\nname = "app"\ndependencies = ["httpx>=1"]\n\n'
+            '[tool.grunt]\ntitle = "App"\ndepends_on = []\n'
+        )
+        (tmp_path / "package.json").write_text('{"name": "app", "dependencies": {"vue": "^3"}}')
+        (tmp_path / "mise.toml").write_text('[tools]\nnode = "26"\n[tasks.lint]\nrun = "ruff"\n')
+        before = self._fp(tmp_path)
+        (tmp_path / "pyproject.toml").write_text(
+            '[project]\nname = "app"\ndescription = "x"\n'
+            'dependencies = ["httpx>=1"]  # comment\n\n'
+            '[tool.grunt]\ntitle = "Інша назва"\ndepends_on = []\n'
+        )
+        (tmp_path / "package.json").write_text(
+            '{"name": "app", "version": "2.0.0", "dependencies": {"vue": "^3"}}'
+        )
+        (tmp_path / "mise.toml").write_text('[tools]\nnode = "26"\n[tasks.lint]\nrun = "x"\n')
+        assert self._fp(tmp_path) == before
+
+    @pytest.mark.parametrize(
+        ("name", "text"),
+        [
+            ("pyproject.toml", '[project]\ndependencies = ["httpx>=2"]\n'),
+            (
+                "pyproject.toml",
+                '[project]\ndependencies = ["httpx>=1"]\n[tool.grunt]\ndepends_on = ["hrm"]\n',
+            ),
+            ("package.json", '{"dependencies": {"vue": "^4"}}'),
+            ("mise.toml", '[tools]\nnode = "27"\n'),
+            ("uv.lock", "version = 1\n"),
+        ],
+    )
+    def test_dependencies_count(self, tmp_path, name, text):
+        (tmp_path / "pyproject.toml").write_text('[project]\ndependencies = ["httpx>=1"]\n')
+        (tmp_path / "package.json").write_text('{"dependencies": {"vue": "^3"}}')
+        (tmp_path / "mise.toml").write_text('[tools]\nnode = "26"\n')
+        before = self._fp(tmp_path)
+        (tmp_path / name).write_text(text)
+        assert self._fp(tmp_path) != before
 
 
 @pytest.mark.real_cleanup

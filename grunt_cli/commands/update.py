@@ -834,13 +834,22 @@ def _install_pdf_browser() -> bool:
 _UV_UPDATE = re.compile(r"^Update (\S+) v(\S+) -> v(\S+)$", re.M)
 
 
-def _outdated_packages() -> tuple[list[str], list[str]]:
-    """``(оновлення, мажорні)`` пакетів фреймворку й додатків.
+# Групи новіших пакетів: ключ → (екосистема, яку оновлювати, підпис).
+_PACKAGE_GROUPS = {
+    "python": ("python", "Python — фреймворк (uv.lock)"),
+    "apps": ("python", "Python — лише додатки (grunt app deps)"),
+    "npm": ("npm", "Node.js — npm (package-lock.json)"),
+}
 
-    Оновлення — те, що візьме --upgrade-packages: ``uv lock --upgrade``
-    (у межах діапазонів, заблоковане чужим піном — ні), пакети лише додатків
-    (``grunt app deps --outdated``) і ``npm update`` (wanted). Мажорні — npm
-    версії поза діапазонами package.json: їх змінюють руками.
+
+def _outdated_packages() -> tuple[dict[str, list[str]], list[str]]:
+    """``({група: оновлення}, мажорні)`` пакетів фреймворку й додатків.
+
+    Оновлення — те, що візьме --upgrade-packages, за групами _PACKAGE_GROUPS:
+    ``uv lock --upgrade`` (у межах діапазонів, заблоковане чужим піном — ні),
+    пакети лише додатків (``grunt app deps --outdated``) і ``npm update``
+    (wanted). Мажорні — npm версії поза діапазонами package.json: їх
+    змінюють руками.
     """
     import json  # noqa: PLC0415
     import shutil  # noqa: PLC0415
@@ -848,7 +857,7 @@ def _outdated_packages() -> tuple[list[str], list[str]]:
     apps_dir = _find_apps_dir()
     grunt_dir = apps_dir / "grunt" if apps_dir else None
     if grunt_dir is None or not grunt_dir.is_dir():
-        return [], []
+        return {}, []
 
     def output(cmd: list[str]) -> str:
         try:
@@ -892,49 +901,66 @@ def _outdated_packages() -> tuple[list[str], list[str]]:
         )
         npm = pool.submit(npm_outdated) if (grunt_dir / "node_modules").is_dir() else None
 
-    updates: list[str] = []
+    updates: dict[str, list[str]] = {}
     majors: list[str] = []
     if plan:
-        updates += [f"{n} {a} → {b}" for n, a, b in _UV_UPDATE.findall(plan.result())]
+        updates["python"] = [f"{n} {a} → {b}" for n, a, b in _UV_UPDATE.findall(plan.result())]
     if apps:
-        updates += [line.strip() for line in apps.result().splitlines() if " → " in line]
+        updates["apps"] = [line.strip() for line in apps.result().splitlines() if " → " in line]
     if npm:
+        updates["npm"] = []
         for name, info in npm.result().items():
             current, wanted, latest = info.get("current"), info.get("wanted"), info.get("latest")
             if not current:
                 continue
             if wanted and wanted != current:
-                updates.append(f"{name} {current} → {wanted}")
+                updates["npm"].append(f"{name} {current} → {wanted}")
             if latest and latest != (wanted or current):
                 majors.append(f"{name} {wanted or current} → {latest}")
-    return updates, majors
+    return {group: lines for group, lines in updates.items() if lines}, majors
 
 
 def _interactive() -> bool:
     return sys.stdin.isatty()
 
 
-def _ask_upgrade_packages() -> bool:
-    """Розробка: показати новіші версії пакетів і спитати, чи оновити lock-файли."""
+_LOCK_FILES = {"python": "uv.lock", "npm": "package-lock.json"}
+
+
+def _ask_upgrade_packages() -> set[str]:
+    """Розробка: показати новіші версії пакетів за групами й спитати, чи
+    оновити lock-файли. Повертає екосистеми ("python", "npm"), які оновити, —
+    лише ті, де новіші версії справді є."""
     console.print("  [dim]Перевіряю новіші версії пакетів...[/dim]")
     outdated, majors = _outdated_packages()
+
+    def show(lines: list[str]) -> None:
+        for line in lines[:15]:
+            console.print(f"    [dim]{line}[/dim]")
+        if len(lines) > 15:
+            console.print(f"    [dim]… і ще {len(lines) - 15}[/dim]")
+
     if majors:
         console.print(
-            f"  [dim]Поза діапазонами package.json ({len(majors)}, міняти вручну):"
-            f" {', '.join(majors)}[/dim]"
+            f"  [dim]Node.js — поза діапазонами package.json ({len(majors)}, міняти вручну):[/dim]"
         )
+        show(majors)
     if not outdated:
         console.print("  [green]✓[/green] Пакети — найновіших версій, які дозволяють діапазони")
-        return False
-    console.print(f"  [yellow]![/yellow] Вийшли новіші версії {len(outdated)} пакетів:")
-    for line in outdated[:15]:
-        console.print(f"    [dim]{line}[/dim]")
-    if len(outdated) > 15:
-        console.print(f"    [dim]… і ще {len(outdated) - 15}[/dim]")
+        return set()
+    for group, lines in outdated.items():
+        console.print(
+            f"  [yellow]![/yellow] {_PACKAGE_GROUPS[group][1]}: новіші версії {len(lines)}"
+        )
+        show(lines)
+    ecosystems = {_PACKAGE_GROUPS[group][0] for group in outdated}
     if not _interactive():
         console.print("  [dim]Оновити lock-файли: grunt update --upgrade-packages[/dim]")
-        return False
-    return click.confirm("  Оновити uv.lock і package-lock.json (потім закомітити)?", default=True)
+        return set()
+    locks = " і ".join(_LOCK_FILES[e] for e in ("python", "npm") if e in ecosystems)
+    if click.confirm(f"  Оновити {locks} (потім закомітити)?", default=True):
+        return ecosystems
+    return set()
 
 
 def _run_npm_install(app_dir: Path, upgrade: bool = False) -> bool:
@@ -1136,15 +1162,65 @@ class _State:
             pass  # без стану наступний запуск просто пройде всі кроки
 
 
+def _dep_content(path: Path) -> bytes:
+    """Те з *path*, від чого залежить встановлене.
+
+    Назва, опис, коментарі pyproject.toml / package.json і задачі mise.toml,
+    крім deps / install, пакетів не міняють — їхня правка не перевстановлює
+    їх. Lock-файли — повністю: вони й є версіями пакетів."""
+    import tomllib  # noqa: PLC0415
+
+    data = path.read_bytes()
+    try:
+        if path.name == "pyproject.toml":
+            doc = tomllib.loads(data.decode())
+            project, tool = doc.get("project", {}), doc.get("tool", {})
+            keep = {
+                **{
+                    k: project.get(k)
+                    for k in (
+                        "requires-python",
+                        "dependencies",
+                        "optional-dependencies",
+                        "scripts",
+                        "gui-scripts",
+                        "entry-points",
+                    )
+                },
+                "dependency-groups": doc.get("dependency-groups"),
+                "build-system": doc.get("build-system"),
+                "uv": tool.get("uv"),
+                "hatch": tool.get("hatch"),
+                # додатки, які `grunt app deps` ставить разом із цим
+                "depends_on": tool.get("grunt", {}).get("depends_on"),
+            }
+        elif path.name == "package.json":
+            doc = json.loads(data)
+            keep = {k: doc.get(k) for k in (*_NPM_DEP_KEYS, "overrides", "workspaces")}
+        elif path.name == "mise.toml":
+            doc = tomllib.loads(data.decode())
+            tasks = doc.get("tasks", {})
+            keep = {
+                "tools": doc.get("tools"),
+                "deps": tasks.get("deps"),
+                "install": tasks.get("install"),
+            }
+        else:
+            return data
+    except (ValueError, UnicodeDecodeError):
+        return data  # не розібрався — хай рахується весь
+    return json.dumps(keep, sort_keys=True, default=str).encode()
+
+
 def _deps_fingerprint(*dirs: Path) -> str:
-    """Відбиток залежностей: вміст _DEP_FILES і наявність .venv/node_modules
-    (видалили node_modules — встановити заново)."""
+    """Відбиток залежностей: те з _DEP_FILES, що визначає пакети (_dep_content),
+    і наявність .venv/node_modules (видалили node_modules — встановити заново)."""
     h = hashlib.sha256()
     for d in dirs:
         h.update(f"{d}\0{(d / '.venv').is_dir()}{(d / 'node_modules').is_dir()}\0".encode())
         for name in _DEP_FILES:
             try:
-                h.update(name.encode() + b"\0" + (d / name).read_bytes() + b"\0")
+                h.update(name.encode() + b"\0" + _dep_content(d / name) + b"\0")
             except OSError:
                 h.update(name.encode() + b"\0-\0")
     return h.hexdigest()
@@ -1563,9 +1639,11 @@ def update(
     # ── 5. Python пакети ────────────────────────────────────────────
     # У розробці новіші версії пакетів не чекають, доки про них згадають:
     # grunt update сам показує їх і питає (на проді — лише за lock-файлами).
+    # Оновлюємо лише екосистему, де є новіші версії: решта — за lock-файлами.
+    to_upgrade = {"python", "npm"} if upgrade_packages else set()
     if not (production or upgrade_packages or skip_packages or no_upgrade_packages):
         console.print("[bold cyan]Новіші пакети[/bold cyan]")
-        upgrade_packages = _ask_upgrade_packages()
+        to_upgrade = _ask_upgrade_packages()
         console.print()
 
     if not skip_packages:
@@ -1574,7 +1652,7 @@ def update(
         key = f"packages:{_find_apps_dir()}"
         fp = _deps_fingerprint(*project) if project else None
         apps_fp = _deps_fingerprint(*(d for d in project if d.name != "grunt"))
-        if upgrade_packages:
+        if "python" in to_upgrade:
             if _update_python_packages(upgrade=True):
                 state.mark(key, _deps_fingerprint(*_project_dirs()))
         elif state.fresh(key, fp):
@@ -1598,12 +1676,12 @@ def update(
         apps_dir = _find_apps_dir()
         grunt_dir = apps_dir / "grunt" if apps_dir else None
         key = f"npm:{grunt_dir}"
-        if framework_deps_done and not upgrade_packages:
+        if framework_deps_done and "npm" not in to_upgrade:
             console.print("  [green]✓[/green] npm пакети вже встановлені (mise run deps)")
         elif grunt_dir and grunt_dir.exists():
-            if not upgrade_packages and state.fresh(key, _deps_fingerprint(grunt_dir)):
+            if "npm" not in to_upgrade and state.fresh(key, _deps_fingerprint(grunt_dir)):
                 console.print("  [green]✓[/green] npm пакети: без змін")
-            elif _run_npm_install(grunt_dir, upgrade=upgrade_packages):
+            elif _run_npm_install(grunt_dir, upgrade="npm" in to_upgrade):
                 state.mark(key, _deps_fingerprint(grunt_dir))
             updated_something = True
         else:
