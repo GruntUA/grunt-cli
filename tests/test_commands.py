@@ -322,28 +322,6 @@ class TestAuth:
 
 
 class TestApp:
-    def test_app_create(self, runner, tmp_path):
-        # title, опис, автор, email, версія, іконка, колір, модуль, git
-        answers = "My App\n\nMe\nme@example.com\n\n\n\n\nn\n"
-        result = runner.invoke(
-            cli, ["app", "create", "my_app", "--dest", str(tmp_path), "--no-git"], input=answers
-        )
-        assert result.exit_code == 0, result.output
-        app_dir = tmp_path / "my_app"
-        assert (app_dir / "my_app" / "hooks.py").exists()
-        assert (app_dir / "my_app" / "doctypes").is_dir()
-        assert (app_dir / "my_app" / "fixtures").is_dir()
-
-        meta = json.loads((app_dir / "app.json").read_text())
-        assert meta["name"] == "my_app"
-        assert meta["title"] == "My App"
-
-    def test_app_create_already_exists(self, runner, tmp_path):
-        (tmp_path / "my_app").mkdir()
-        with patch("grunt_cli.commands.app.get_apps_dir", return_value=tmp_path):
-            result = runner.invoke(cli, ["app", "create", "my_app"])
-            assert result.exit_code != 0
-
     @patch("subprocess.run", return_value=MagicMock(returncode=0))
     def test_app_install_local(self, mock_run, runner, tmp_path):
         bench = tmp_path / "bench"
@@ -550,6 +528,30 @@ class TestSites:
 
 
 class TestUpdate:
+    def test_pdf_browser_installed_with_venv_python(self, tmp_path):
+        from grunt_cli.commands import update
+
+        python = tmp_path / "grunt" / ".venv" / "bin" / "python"
+        python.parent.mkdir(parents=True)
+        python.touch()
+        with (
+            patch.object(update, "_find_apps_dir", return_value=tmp_path),
+            patch.object(update, "run_captured", return_value=0) as run,
+        ):
+            assert update._install_pdf_browser()
+        cmd = run.call_args.args[0]
+        assert cmd == [str(python), "-m", "playwright", "install", "--only-shell", "chromium"]
+
+    def test_pdf_browser_skipped_without_venv(self, tmp_path):
+        from grunt_cli.commands import update
+
+        with (
+            patch.object(update, "_find_apps_dir", return_value=tmp_path),
+            patch.object(update, "run_captured") as run,
+        ):
+            assert update._install_pdf_browser()
+        run.assert_not_called()
+
     @patch("grunt_cli.commands.update._restart_production", return_value=True)
     @patch("grunt_cli.commands.update._run_migrations", return_value=True)
     @patch("grunt_cli.commands.update._run_npm_install")
@@ -914,6 +916,17 @@ class TestFrameworkDelegation:
             "--yes",
         ]
         assert mock_run.call_args.kwargs["env"]["DOTENV_PATH"] == "/bench/sites/s/.env"
+
+    @patch(
+        "grunt_cli.helpers.get_venv_grunt",
+        return_value=["/bench/apps/grunt/.venv/bin/python", "-m", "grunt.cli.main"],
+    )
+    @patch("subprocess.run")
+    def test_app_create_goes_to_framework_cli(self, mock_run, _venv, runner):
+        mock_run.return_value = MagicMock(returncode=0)
+        result = runner.invoke(cli, ["app", "create", "my_app", "--no-git"])
+        assert result.exit_code == 0, result.output
+        assert mock_run.call_args.args[0][-4:] == ["app", "create", "my_app", "--no-git"]
 
     @patch("grunt_cli.helpers.get_venv_grunt", return_value=None)
     def test_unknown_command_outside_project(self, _venv, runner):

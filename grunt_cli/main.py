@@ -76,7 +76,7 @@ def _load_plugins() -> None:
     for ep in entry_points(group="grunt.commands"):
         try:
             cmd = ep.load()
-            if isinstance(cmd, click.BaseCommand):
+            if isinstance(cmd, click.Command):
                 cli.add_command(cmd, name=ep.name)
         except Exception as exc:  # noqa: BLE001
             click.echo(f"[warn] grunt.commands plugin '{ep.name}' failed to load: {exc}", err=True)

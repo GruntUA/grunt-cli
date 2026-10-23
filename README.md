@@ -232,10 +232,11 @@ grunt app install my-app --site dev.myproject.com
 
 #### `grunt app create`
 
-Scaffold a new app structure locally.
+Scaffold a new app (runs the framework's `grunt app create`; the manifest is
+`[tool.grunt]` in the app's `pyproject.toml`).
 
 ```bash
-grunt app create <NAME> [--title "My App"]
+grunt app create <NAME> [--no-git] [--dest DIR]
 ```
 
 #### `grunt app list`

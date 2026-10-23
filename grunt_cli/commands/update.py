@@ -55,16 +55,17 @@ def _git_fetch(path: Path, label: str, *args: str) -> bool:
     remote = _git(path, "remote", "get-url", "origin").stdout.strip()
     github_path = github_repo_path(remote)
 
-    for attempt in range(2):
+    def fetch() -> tuple[subprocess.CompletedProcess[str], bool]:
         result = _git(path, "fetch", *args, env=env)
         auth_error = result.returncode != 0 and any(
             marker in result.stderr.lower()
             for marker in ("could not read username", "authentication failed", "not found")
         )
-        if not (auth_error and attempt == 0 and github_path and sys.stdin.isatty()):
-            break
-        if not ask_github_token(github_path):
-            break
+        return result, auth_error
+
+    result, auth_error = fetch()
+    if auth_error and github_path and sys.stdin.isatty() and ask_github_token(github_path):
+        result, auth_error = fetch()
 
     if result.returncode == 0:
         return True
@@ -804,6 +805,32 @@ def _update_python_packages(upgrade: bool = False) -> bool:
     return False
 
 
+def _install_pdf_browser() -> bool:
+    """Chromium для друку в PDF (grunt/print/pdf.py фреймворку).
+
+    Кожен реліз Playwright шукає свою збірку Chromium, тож після оновлення
+    пакета стара збірка вже не підходить. Запускається завжди, не за
+    відбитком: кеш ~/.cache/ms-playwright живе окремо від lock-файлів, а з
+    уже встановленою збіркою команда нічого не завантажує. --only-shell —
+    лише headless shell, яким друкує фреймворк (без повного Chrome, ~150 МБ).
+    Застарілі збірки Playwright прибирає сам.
+    """
+    apps_dir = _find_apps_dir()
+    python = apps_dir / "grunt" / ".venv" / "bin" / "python" if apps_dir else None
+    if python is None or not python.exists():
+        return True
+    if run_captured(
+        [str(python), "-m", "playwright", "install", "--only-shell", "chromium"],
+        status="Перевіряю Chromium для PDF (playwright install)...",
+    ):
+        console.print(
+            "  [yellow]⚠[/yellow]  Chromium для PDF не встановився — друк у PDF не працюватиме"
+        )
+        return False
+    console.print("  [green]✓[/green] Chromium для PDF встановлений")
+    return True
+
+
 _UV_UPDATE = re.compile(r"^Update (\S+) v(\S+) -> v(\S+)$", re.M)
 
 
@@ -1000,7 +1027,7 @@ def _restart_production(migrated: bool) -> bool:
     """
     bench = get_bench_dir()
     units = installed_units(bench) if bench else []
-    if not units:
+    if bench is None or not units:
         console.print(
             "  [dim]Розробка (сервіси не встановлено): grunt serve підхопить зміни сам;"
             " після оновлення пакетів перезапустіть його[/dim]"
@@ -1071,7 +1098,6 @@ _DEP_FILES = (
     "package.json",
     "package-lock.json",
     "mise.toml",
-    "app.json",
 )
 
 
@@ -1298,7 +1324,8 @@ def update(
          фреймворку, щоб venv створював уже новий uv
       3. git fetch + rebase для фреймворку та додатків (+ mise run deps)
       4. uv sync --locked --inexact + grunt app deps (клонує відсутні додатки з
-         depends_on, ставить Python пакети фреймворку й додатків)
+         depends_on, ставить Python пакети фреймворку й додатків) +
+         playwright install --only-shell chromium (Chromium для PDF)
       5. npm install
       6. grunt migrate (Alembic + DocType-таблиці + fixtures)
       7. прод (є systemd-сервіси): mise run build + перезапуск сервісів
@@ -1307,8 +1334,8 @@ def update(
 
     \b
     Кроки, де з минулого успішного запуску нічого не змінилось, пропускаються:
-    встановлення пакетів (ті самі lock-файли, pyproject.toml, mise.toml,
-    app.json), міграції (той самий код фреймворку й додатків), збірка й
+    встановлення пакетів (ті самі lock-файли, pyproject.toml, mise.toml),
+    міграції (той самий код фреймворку й додатків), збірка й
     перезапуск на проді (той самий код і рантайми). git fetch усіх
     репозиторіїв іде паралельно. --full — пройти всі кроки (напр. після
     grunt db restore, якщо базу треба домігрувати).
@@ -1558,6 +1585,7 @@ def update(
             state.mark(key, fp)
         elif _update_python_packages(upgrade=False):
             state.mark(key, _deps_fingerprint(*_project_dirs()))
+        _install_pdf_browser()
         updated_something = True
         console.print()
     else:

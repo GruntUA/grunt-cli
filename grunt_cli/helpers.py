@@ -474,8 +474,8 @@ def git_clone(repo: str, cwd: Path, *, dest: str | None = None, branch: str | No
             return True
         stderr = result.stderr.strip()
         is_auth_error = any(marker in stderr.lower() for marker in _GIT_AUTH_ERRORS)
-        can_ask = attempt == 0 and is_auth_error and github_path and sys.stdin.isatty()
-        if not can_ask:
+        can_ask = attempt == 0 and is_auth_error and sys.stdin.isatty()
+        if not (can_ask and github_path):
             if stderr:
                 console.print(f"[dim]{stderr}[/dim]")
             if is_auth_error and github_path:

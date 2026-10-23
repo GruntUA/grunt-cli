@@ -17,57 +17,15 @@ from grunt_cli.helpers import (
 )
 
 
-def _load_app_meta(app_dir: Path) -> dict | None:
-    """Завантажує метадані додатку з app.json або grunt_app.py."""
-
-    app_json = app_dir / "app.json"
-    if app_json.exists():
-        return json.loads(app_json.read_text())
-
-    grunt_app = app_dir / "grunt_app.py"
-    if grunt_app.exists():
-        ns: dict = {}
-        exec(grunt_app.read_text(), ns)
-        return {
-            "name": ns.get("APP_NAME", app_dir.name),
-            "title": ns.get("APP_TITLE", app_dir.name),
-            "version": ns.get("APP_VERSION", "0.1.0"),
-            "modules": ns.get("MODULES", []),
-        }
-
-    return None
-
-
 @click.group(cls=FrameworkGroup)
 def app() -> None:
     """Команди для управління Grunt-додатками.
 
     \b
-    Решту команд (remove, deps, doctor) виконує CLI фреймворку:
+    Решту команд (create, remove, deps, doctor) виконує CLI фреймворку:
+      grunt app create NAME     новий додаток (шаблон фреймворку)
       grunt app remove NAME     прибрати додаток з диску (у archive/apps/)
     """
-
-
-@app.command("create")
-@click.argument("name")
-@click.option("--no-git", is_flag=True, default=False, help="Не ініціалізувати git репозиторій")
-@click.option("--dest", default=None, help="Директорія для створення (за замовчуванням: apps/)")
-def app_create(name: str, no_git: bool, dest: str | None) -> None:
-    """Інтерактивно створити новий Grunt-додаток з повною структурою.
-
-    \b
-    Приклади:
-      grunt app create my_crm
-      grunt app create my_crm --no-git
-      grunt app create my_crm --dest /tmp/apps
-    """
-    from pathlib import Path  # noqa: PLC0415
-
-    from grunt_cli.utils.boilerplate import make_boilerplate  # noqa: PLC0415
-
-    dest_path = Path(dest) if dest else get_apps_dir()
-    dest_path.mkdir(parents=True, exist_ok=True)
-    make_boilerplate(dest_path, name, no_git=no_git)
 
 
 @app.command("get")
