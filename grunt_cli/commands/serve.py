@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import signal
 import subprocess
 import sys
+import threading
 import time
+from datetime import datetime
 from os import killpg
 from pathlib import Path
 
@@ -220,10 +223,10 @@ def _serve_bench(
         if env_file.exists():
             backend_env["DOTENV_PATH"] = str(env_file)
 
-    # mise prefixes every output line with the task label ([backend], [worker],
-    # [frontend]) and drops its "$ <script>" echo; the children then write to a
-    # pipe, so ask them to keep colours.
-    output_env = {"MISE_TASK_OUTPUT": "prefix", "MISE_QUIET": "true", "FORCE_COLOR": "1"}
+    # Output goes through _pump (our own labels, time, noise filter), so mise
+    # passes it as is and drops its "$ <script>" echo; the children then write
+    # to a pipe, so ask them to keep colours.
+    output_env = {"MISE_TASK_OUTPUT": "interleave", "MISE_QUIET": "true", "FORCE_COLOR": "1"}
     backend_env.update(output_env)
 
     procs: list[subprocess.Popen] = []
@@ -315,21 +318,15 @@ def _serve_bench(
         for s in sites:
             marker = " ←" if active_site_dir and active_site_dir.name == s else ""
             console.print(f"  [dim]Site:     {s}{marker}[/dim]")
+        if not no_reload:
+            console.print(f"  [dim]Reload:   {len(reload_dirs)} пакетів[/dim]")
 
-        procs.append(
-            run_mise_popen(
-                grunt_dir, "backend", env=backend_env, config_file=grunt_dir / "mise.toml"
-            )
-        )
+        procs.append(_spawn(grunt_dir, "backend", backend_env))
 
         # Tasks go to Redis when the site has REDIS_URL — someone has to take them.
         if _redis_configured(backend_env, grunt_dir):
             console.print("[green]▶[/green] Worker:   TaskIQ [dim](Redis)[/dim]")
-            procs.append(
-                run_mise_popen(
-                    grunt_dir, "worker", env=backend_env, config_file=grunt_dir / "mise.toml"
-                )
-            )
+            procs.append(_spawn(grunt_dir, "worker", backend_env))
         else:
             console.print(
                 "  [dim]Worker:   не потрібен (REDIS_URL не задано — задачі в процесі)[/dim]"
@@ -373,9 +370,88 @@ def _start_frontend(procs: list, grunt_dir: Path, env: dict[str, str]) -> None:
         return
 
     console.print("[green]▶[/green] Frontend: http://localhost:5173")
-    procs.append(
-        run_mise_popen(grunt_dir, "frontend", env=env, config_file=grunt_dir / "mise.toml")
+    procs.append(_spawn(grunt_dir, "frontend", env))
+
+
+_LABEL_COLORS = {"backend": "36", "worker": "35", "frontend": "32"}
+_LABEL_WIDTH = max(map(len, _LABEL_COLORS))
+_LEVEL_COLORS = {"WARNING": "33", "ERROR": "31", "CRITICAL": "1;31"}
+_ANSI = r"(?:\x1b\[[0-9;]*m)*"
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+# uvicorn: "INFO:     Started server process [526]"
+_UVICORN_RE = re.compile(r"^(DEBUG|INFO|WARNING|ERROR|CRITICAL):\s+(.*)$")
+# stdlib logging default format: "INFO:taskiq.process-manager:Started process ..."
+_STDLOG_RE = re.compile(r"^(DEBUG|INFO|WARNING|ERROR|CRITICAL):[\w.\-]+:(.*)$")
+# structlog ISO timestamp (UTC) and vite's "10:25:02 AM" — the line gets our local time instead.
+_STRUCTLOG_TS_RE = re.compile(rf"^{_ANSI}\d{{4}}-\d\d-\d\dT[\d:.]+Z?{_ANSI} ")
+_VITE_TS_RE = re.compile(rf"^{_ANSI}\d{{1,2}}:\d\d:\d\d [AP]M{_ANSI} ")
+# Startup/reload chatter that repeats the banner or says nothing useful.
+_NOISE = (
+    "Will watch for changes in these directories",
+    "Uvicorn running on",
+    "Started reloader process",
+    "Waiting for application startup.",
+    "Waiting for application shutdown.",
+    "Application shutdown complete.",
+    "Finished server process",
+    "Reload on change enabled",
+    "Local:   http://localhost:",
+)
+
+
+def _format_line(line: str) -> str | None:
+    """Cleaned-up line of a dev process output, or None to drop it."""
+    line = line.rstrip()
+    plain = _ANSI_RE.sub("", line)
+    if not plain.strip() or plain.startswith("> "):  # blank / npm "> vite" echo
+        return None
+    if any(n in plain for n in _NOISE):
+        return None
+    m = _UVICORN_RE.match(plain) or _STDLOG_RE.match(plain)
+    if m:
+        level, msg = m.group(1), m.group(2).strip().removesuffix(" (Press CTRL+C to quit)")
+        color = _LEVEL_COLORS.get(level)
+        return f"\x1b[{color}m{level}\x1b[0m {msg}" if color else msg
+    line = _STRUCTLOG_TS_RE.sub("", line)
+    line = _VITE_TS_RE.sub("", line)
+    if plain.lstrip().startswith(("VITE", "➜")):
+        line = line.lstrip()
+    return line
+
+
+_COLOR = sys.stdout.isatty() and "NO_COLOR" not in os.environ
+_output_lock = threading.Lock()
+
+
+def _pump(proc: subprocess.Popen, label: str, lock: threading.Lock) -> None:
+    """Copy a child's output to our stdout, line by line, with time and label."""
+    color = _LABEL_COLORS.get(label, "0")
+    prefix = f"\x1b[{color}m{label:<{_LABEL_WIDTH}}\x1b[0m \x1b[2m│\x1b[0m "
+    for raw in iter(proc.stdout.readline, b""):
+        line = _format_line(raw.decode(errors="replace"))
+        if line is None:
+            continue
+        stamp = datetime.now().strftime("%H:%M:%S")
+        out = f"\x1b[2m{stamp}\x1b[0m {prefix}{line}"
+        if not _COLOR:
+            out = _ANSI_RE.sub("", out)
+        with lock:
+            sys.stdout.write(out + "\n")
+            sys.stdout.flush()
+
+
+def _spawn(grunt_dir: Path, task: str, env: dict[str, str]) -> subprocess.Popen:
+    """Run a mise task with its output piped through _pump."""
+    proc = run_mise_popen(
+        grunt_dir,
+        task,
+        env=env,
+        config_file=grunt_dir / "mise.toml",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
     )
+    threading.Thread(target=_pump, args=(proc, task, _output_lock), daemon=True).start()
+    return proc
 
 
 def _wait_for_procs(procs: list, shutdown) -> None:
