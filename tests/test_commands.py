@@ -531,6 +531,8 @@ class TestOsUpdates:
             calls.append(cmd)
             if cmd[0] == "apt":
                 return subprocess.CompletedProcess(cmd, 0, listing, "")
+            if cmd[:2] == ["sudo", "-v"]:  # the password was typed in
+                return subprocess.CompletedProcess(cmd, 0, "", "")
             return subprocess.CompletedProcess(cmd, 0 if sudo_ok else 1, "", "")
 
         return run
@@ -565,7 +567,21 @@ class TestOsUpdates:
 
     def test_terminal_asks_for_the_password(self, monkeypatch, tmp_path):
         calls, _ = self._check(monkeypatch, tmp_path, interactive=True, sudo_ok=False)
-        assert calls[1][:2] == ["sudo", "-p"] and calls[1][-3:] == ["apt-get", "update", "-qq"]
+        # the password is asked outside the spinner, then apt-get runs with the cached sudo
+        assert calls[1][:3] == ["sudo", "-v", "-p"]
+        assert calls[2] == ["sudo", "-n", "apt-get", "update", "-qq"]
+
+    def test_apt_timeout_falls_back_to_existing_lists(self, monkeypatch, tmp_path):
+        from grunt_cli.commands import update
+
+        def run(cmd, **kwargs):
+            if cmd[0] == "apt":
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
+
+        monkeypatch.setattr(update.os, "geteuid", lambda: 0)
+        monkeypatch.setattr(update.subprocess, "run", run)
+        assert update._apt_refresh() is False
 
     def test_reboot_required(self, monkeypatch, tmp_path):
         (tmp_path / "reboot-required").touch()

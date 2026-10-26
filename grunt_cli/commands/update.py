@@ -455,24 +455,35 @@ _REBOOT_REQUIRED = Path("/var/run/reboot-required")
 _OS_LIST_MAX = 8
 
 
-def _apt_refresh() -> bool:
-    """`apt-get update`: через sudo без пароля, якщо можна; у терміналі — спитавши пароль.
+_APT_TIMEOUT = 300
 
-    Без терміналу й без sudo без пароля списки не оновлюються — перелік
-    тоді за тими, що вже є (unattended-upgrades/apt-daily оновлюють їх щодня)."""
+
+def _apt_refresh() -> bool:
+    """`apt-get update` під root або через sudo без пароля.
+
+    Без sudo без пароля списки не оновлюються — перелік тоді за тими, що
+    вже є (unattended-upgrades/apt-daily оновлюють їх щодня)."""
     cmd = ["apt-get", "update", "-qq"]
-    if os.geteuid() == 0:
-        attempts = [cmd]
-    else:
-        attempts = [["sudo", "-n", *cmd]]
-        if _interactive():
-            attempts.append(["sudo", "-p", "  [sudo] пароль для apt-get update: ", *cmd])
-    for attempt in attempts:
-        # sudo питає пароль через /dev/tty, тож вивід можна забирати.
-        result = subprocess.run(attempt, capture_output=True, text=True, check=False)
-        if result.returncode == 0:
-            return True
-    return False
+    if os.geteuid() != 0:
+        cmd = ["sudo", "-n", *cmd]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, check=False, timeout=_APT_TIMEOUT
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    return result.returncode == 0
+
+
+def _sudo_login() -> bool:
+    """Спитати пароль sudo (лише в терміналі й не під спінером — інакше
+    спінер затирає запрошення і здається, що все зависло)."""
+    if os.geteuid() == 0 or not _interactive():
+        return False
+    result = subprocess.run(
+        ["sudo", "-v", "-p", "  [sudo] пароль для apt-get update: "], check=False
+    )
+    return result.returncode == 0
 
 
 def _apt_lists_age() -> str | None:
@@ -516,6 +527,9 @@ def _check_os_updates() -> None:
         return
     with console.status("  Оновлюю списки пакетів ОС (apt-get update)..."):
         refreshed = _apt_refresh()
+    if not refreshed and _sudo_login():
+        with console.status("  Оновлюю списки пакетів ОС (apt-get update)..."):
+            refreshed = _apt_refresh()
     if refreshed:
         console.print("  [green]✓[/green] Списки пакетів ОС оновлено")
     else:
