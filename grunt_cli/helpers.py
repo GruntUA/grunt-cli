@@ -514,6 +514,56 @@ def find_uv() -> str | None:
     return uv_bin
 
 
+def _group_path(ctx: click.Context) -> list[str]:
+    """Шлях групи без кореня: [] для `grunt`, ["app"] для `grunt app`."""
+    prefix: list[str] = []
+    node: click.Context | None = ctx
+    while node is not None and node.parent is not None:
+        prefix.insert(0, node.info_name or "")
+        node = node.parent
+    return prefix
+
+
+_LIST_COMMANDS_SCRIPT = """
+import sys
+import click
+from grunt.cli.main import cli
+ctx = click.Context(cli, info_name="grunt")
+group = cli
+for name in sys.argv[1:]:
+    group = group.get_command(ctx, name) if isinstance(group, click.Group) else None
+if isinstance(group, click.Group):
+    for name in group.list_commands(ctx):
+        cmd = group.get_command(ctx, name)
+        if cmd is not None and not cmd.hidden:
+            print(name + "\\t" + cmd.get_short_help_str(limit=60))
+"""
+
+
+def _framework_commands(prefix: list[str]) -> list[tuple[str, str]]:
+    """Команди CLI фреймворку для групи ``prefix`` — лише для help (імпорт фреймворку ~1 с)."""
+    venv_python = get_venv_python()
+    if venv_python is None:
+        return []
+    try:
+        result = subprocess.run(
+            [venv_python, "-c", _LIST_COMMANDS_SCRIPT, *prefix],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env={**os.environ, **({"DOTENV_PATH": d} if (d := get_dotenv_path()) else {})},
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if result.returncode != 0:
+        return []
+    return [
+        (name, help_)
+        for name, _, help_ in (line.partition("\t") for line in result.stdout.splitlines())
+        if name
+    ]
+
+
 class FrameworkGroup(click.Group):
     """Підкоманди, яких немає в grunt-cli, передає CLI фреймворку проєкту
     (``apps/grunt/.venv/bin/grunt``) під тим самим шляхом: ``grunt data export``,
@@ -527,12 +577,7 @@ class FrameworkGroup(click.Group):
         if framework_cli is None:
             return None
 
-        # Шлях групи без кореня: [] для `grunt`, ["app"] для `grunt app`
-        prefix: list[str] = []
-        node: click.Context | None = ctx
-        while node is not None and node.parent is not None:
-            prefix.insert(0, node.info_name or "")
-            node = node.parent
+        prefix = _group_path(ctx)
 
         @click.command(
             cmd_name,
@@ -548,6 +593,21 @@ class FrameworkGroup(click.Group):
             raise SystemExit(result.returncode)
 
         return _framework_command
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        # Click 8.2+ на `grunt` без аргументів показує help і виходить з кодом 2
+        if not args and self.no_args_is_help and not ctx.resilient_parsing:
+            click.echo(ctx.get_help(), color=ctx.color)
+            ctx.exit(0)
+        return super().parse_args(ctx, args)
+
+    def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
+        super().format_commands(ctx, formatter)
+        own = set(self.list_commands(ctx))
+        rows = [(n, h) for n, h in _framework_commands(_group_path(ctx)) if n not in own]
+        if rows:
+            with formatter.section("Команди фреймворку"):
+                formatter.write_dl(rows)
 
     def resolve_command(
         self, ctx: click.Context, args: list[str]
