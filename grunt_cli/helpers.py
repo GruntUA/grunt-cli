@@ -254,29 +254,6 @@ def venv_delegate(
     return result.returncode
 
 
-def find_doctype_json(name: str) -> dict | None:
-    """Знаходить і повертає JSON DocType з будь-якого встановленого додатку.
-
-    Шукає по патерну: apps/<app>/<pkg>/doctypes/<Name>/<Name>.json
-    """
-    import json as _json  # noqa: PLC0415
-
-    bench = get_bench_dir()
-    if bench is None:
-        return None
-    apps_dir = bench / "apps"
-    for app_dir in sorted(apps_dir.iterdir()):
-        if not app_dir.is_dir():
-            continue
-        for pkg_dir in app_dir.iterdir():
-            if not pkg_dir.is_dir() or pkg_dir.name.startswith("."):
-                continue
-            dt_json = pkg_dir / "doctypes" / name / f"{name}.json"
-            if dt_json.exists():
-                return _json.loads(dt_json.read_text(encoding="utf-8"))
-    return None
-
-
 def get_venv_python() -> str | None:
     """Повертає шлях до Python у .venv проекту, або None якщо не знайдено."""
     bench_dir = get_bench_dir()
@@ -284,30 +261,6 @@ def get_venv_python() -> str | None:
         return None
     venv_python = bench_dir / "apps" / "grunt" / ".venv" / "bin" / "python"
     return str(venv_python) if venv_python.exists() else None
-
-
-def run_venv_script(script: str, site: str | None = None) -> int:
-    """Виконує Python-скрипт через venv проекту і повертає exit code.
-
-    Вивід скрипту йде прямо в термінал.
-    Повертає -1 якщо venv не знайдено.
-    """
-    python = get_venv_python()
-    if not python:
-        return -1
-
-    bench = get_bench_dir()
-    grunt_dir = str(bench / "apps" / "grunt") if bench else os.getcwd()
-    env = {**os.environ}
-    dotenv = get_dotenv_path()
-    if dotenv:
-        env["DOTENV_PATH"] = dotenv
-    site_name = site or get_current_site_name()
-    if site_name:
-        env["GRUNT_SITE"] = site_name
-
-    result = subprocess.run([python, "-c", script], cwd=grunt_dir, env=env)
-    return result.returncode
 
 
 # ---------------------------------------------------------------------------
@@ -595,3 +548,18 @@ class FrameworkGroup(click.Group):
             raise SystemExit(result.returncode)
 
         return _framework_command
+
+    def resolve_command(
+        self, ctx: click.Context, args: list[str]
+    ) -> tuple[str | None, click.Command | None, list[str]]:
+        try:
+            return super().resolve_command(ctx, args)
+        except click.UsageError as e:
+            if get_venv_grunt() is not None:
+                raise
+            # Поза bench невідома команда — найчастіше команда фреймворку
+            raise click.UsageError(
+                f"{e.message}\nКоманди фреймворку (migrate, db, site, doctype, users…) "
+                "доступні в папці bench-проєкту (потрібен apps/grunt/.venv).",
+                ctx,
+            ) from e

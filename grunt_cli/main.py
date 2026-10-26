@@ -11,23 +11,14 @@ import click
 from grunt_cli import __version__
 from grunt_cli.commands.app import app
 from grunt_cli.commands.auth import auth
-from grunt_cli.commands.db import db
-from grunt_cli.commands.doctype import doctype
-from grunt_cli.commands.fixtures import fixtures
 from grunt_cli.commands.init import init
 from grunt_cli.commands.install import install
-from grunt_cli.commands.lint import lint
 from grunt_cli.commands.master import master
-from grunt_cli.commands.migrate import migrate
 from grunt_cli.commands.restart import restart
 from grunt_cli.commands.serve import serve
 from grunt_cli.commands.setup import setup
-from grunt_cli.commands.shell import shell
-from grunt_cli.commands.sites import sites
-from grunt_cli.commands.test import test
 from grunt_cli.commands.update import update
 from grunt_cli.commands.upgrade import upgrade
-from grunt_cli.commands.users import users
 from grunt_cli.helpers import FrameworkGroup
 
 
@@ -47,20 +38,11 @@ cli.add_command(init)
 cli.add_command(serve)
 cli.add_command(restart)
 cli.add_command(setup)
-cli.add_command(db)
-cli.add_command(doctype)
 cli.add_command(auth)
-cli.add_command(users)
 cli.add_command(app)
-cli.add_command(migrate)
 cli.add_command(update)
 cli.add_command(upgrade)
-cli.add_command(sites)
-cli.add_command(test)
 cli.add_command(master)
-cli.add_command(shell)
-cli.add_command(fixtures)
-cli.add_command(lint)
 
 
 def _load_plugins() -> None:

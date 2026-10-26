@@ -189,108 +189,44 @@ grunt restart --worker    # only the background worker
 
 ---
 
-### `grunt app`
+### `grunt app get`
 
-Manage Grunt applications.
-
-#### `grunt app get`
-
-Download an app from a Git repository.
+Download an app from a Git repository into `./apps/` (works without the
+framework's venv, so it can fetch an app into a fresh bench).
 
 ```bash
 grunt app get <REPO_URL> [--branch BRANCH]
-```
-
-```bash
-grunt app get https://github.com/GruntUA/Grunt
 grunt app get https://github.com/MyOrg/my-app --branch develop
 ```
 
-Downloaded apps are stored in `./apps/` (if inside a Grunt project) or `~/.grunt/apps/` (globally).
-
-#### `grunt app install`
-
-Install a downloaded app on a site.
-
-```bash
-grunt app install <NAME> --site <SITE>
-```
-
-`--site` accepts a hostname or full URL:
-
-| Value | Resolves to |
-|---|---|
-| `localhost` | `http://localhost:8000` |
-| `localhost:9000` | `http://localhost:9000` |
-| `dev.myproject.com` | `https://dev.myproject.com` |
-| `http://10.0.0.1:8080` | `http://10.0.0.1:8080` |
-
-```bash
-grunt app install Grunt --site localhost
-grunt app install my-app --site dev.myproject.com
-```
-
-#### `grunt app create`
-
-Scaffold a new app (runs the framework's `grunt app create`; the manifest is
-`[tool.grunt]` in the app's `pyproject.toml`).
-
-```bash
-grunt app create <NAME> [--no-git] [--dest DIR]
-```
-
-#### `grunt app list`
-
-List apps installed on a site.
-
-```bash
-grunt app list [--api http://localhost:8000]
-```
-
-#### `grunt app export`
-
-Export DocTypes from a site to local JSON files.
-
-```bash
-grunt app export <NAME> [--api http://localhost:8000]
-```
-
 ---
 
-### `grunt migrate`
+### Framework commands
 
-Bring the database in line with the code: Alembic migrations, then the DocType
-tables (new DocTypes, new columns) and fixtures. Run after every update or pull.
-
-```bash
-grunt migrate                       # all sites
-grunt migrate --site mysite.local   # one site
-grunt migrate --dry-run             # show the DocType SQL without running it
-```
-
----
-
-### `grunt db`
-
-Database management commands.
+Everything that works with sites, the database or DocTypes is implemented by
+the framework (`apps/grunt`, `grunt/cli/`). Inside a bench `grunt` forwards
+any command it does not know itself to the framework's CLI unchanged, so
+`grunt <command> --help` always shows the real options.
 
 ```bash
-grunt db rollback [N]     # Revert N migrations (default: 1)
-grunt db history          # Show migration history
-grunt db reset --yes      # Delete all data (DEBUG mode only)
+grunt migrate [--site SITE]          # Alembic + DocType tables + fixtures
+grunt app install|uninstall|list|create|remove|deps|export
+grunt site list|info|create|delete|use   # `sites`, `site new/drop` still work
+grunt users list|create|set-password
+grunt db backup|restore|rollback|history|...
+grunt doctype list|show|sync|scaffold|sync-types|export|import|test-gen
+grunt fixtures export|dump|load
+grunt data export|import
+grunt shell [--site SITE]            # Python REPL inside a site
+grunt test [APP] [pytest args]
+grunt lint [--app APP] [--fix] [--format json]
 ```
 
----
-
-### `grunt doctype`
-
-Inspect and manage DocTypes on a running site.
-
-```bash
-grunt doctype list [--module MODULE]   # List all DocTypes
-grunt doctype show <NAME>              # Show DocType details and fields
-grunt doctype sync <NAME>              # Sync DocType schema with the database
-```
+The split: grunt-cli keeps what runs *around* a bench — creating it
+(`install`, `init`, `master`), updating it (`update`, `upgrade`), running it
+(`serve`, `restart`, `setup production`), `auth` and `app get`. A command is
+implemented in exactly one place; add new site/DB/DocType commands to the
+framework, not here.
 
 ---
 

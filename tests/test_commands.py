@@ -145,104 +145,6 @@ class TestInit:
             assert (bench / "logs" / "web").is_dir()
 
 
-# ── grunt db ────────────────────────────────────────────────────
-
-
-class TestDb:
-    def test_db_migrate_removed(self, runner):
-        """Only `grunt migrate` migrates - an alembic-only `db migrate` left the
-        DocType tables behind."""
-        result = runner.invoke(cli, ["db", "migrate"])
-        assert result.exit_code != 0
-
-    @patch("grunt_cli.commands.db.subprocess.run")
-    def test_db_rollback(self, mock_run, runner, tmp_path):
-        site_dir = tmp_path / "site"
-        site_dir.mkdir()
-        (site_dir / "grunt.site").write_text("{}")
-        backend = site_dir / "apps" / "grunt" / "backend"
-        backend.mkdir(parents=True)
-        mock_run.return_value = MagicMock(returncode=0)
-
-        with patch("grunt_cli.commands.db.get_site_dir", return_value=site_dir):
-            result = runner.invoke(cli, ["db", "rollback", "2"])
-            assert result.exit_code == 0
-            mock_run.assert_called_once()
-            cmd = mock_run.call_args[0][0]
-            assert "-2" in cmd
-
-
-# ── grunt migrate ───────────────────────────────────────────────
-
-
-class TestMigrate:
-    """`grunt migrate` only delegates to `grunt migrate` in the project venv -
-    Alembic runs there, per site; a second run here doubled it."""
-
-    def _make_bench(self, tmp_path: Path) -> Path:
-        bench = tmp_path / "bench"
-        app_dir = bench / "apps" / "grunt"
-        venv_bin = app_dir / ".venv" / "bin"
-        venv_bin.mkdir(parents=True)
-        (app_dir / "alembic.ini").write_text("[alembic]\n")
-        (venv_bin / "python").touch()
-
-        site_a = bench / "sites" / "a.local"
-        site_a.mkdir(parents=True)
-        (site_a / "grunt.site").write_text("{}")
-
-        return bench
-
-    @patch("grunt_cli.commands.migrate.subprocess.run")
-    def test_migrate_without_site_delegates_to_venv_grunt(
-        self, mock_run, runner, tmp_path, monkeypatch
-    ):
-        bench = self._make_bench(tmp_path)
-        mock_run.return_value = MagicMock(returncode=0)
-
-        monkeypatch.chdir(bench)
-        result = runner.invoke(cli, ["migrate"])
-
-        assert result.exit_code == 0
-        mock_run.assert_called_once()  # no separate alembic run
-
-        delegated_cmd = mock_run.call_args[0][0]
-        assert delegated_cmd[0].endswith("/apps/grunt/.venv/bin/python")
-        assert delegated_cmd[1:] == ["-m", "grunt.cli.main", "migrate"]
-
-    @patch("grunt_cli.commands.migrate.subprocess.run")
-    def test_migrate_with_site_passes_through(self, mock_run, runner, tmp_path, monkeypatch):
-        bench = self._make_bench(tmp_path)
-        mock_run.return_value = MagicMock(returncode=0)
-
-        monkeypatch.chdir(bench)
-        result = runner.invoke(
-            cli, ["migrate", "--site", "a.local", "--dry-run", "--no-alembic"]
-        )
-
-        assert result.exit_code == 0
-        delegated_cmd = mock_run.call_args[0][0]
-        assert delegated_cmd[1:] == [
-            "-m",
-            "grunt.cli.main",
-            "migrate",
-            "--site",
-            "a.local",
-            "--dry-run",
-            "--no-alembic",
-        ]
-
-    @patch("grunt_cli.commands.migrate.subprocess.run")
-    def test_migrate_propagates_exit_code(self, mock_run, runner, tmp_path, monkeypatch):
-        bench = self._make_bench(tmp_path)
-        mock_run.return_value = MagicMock(returncode=1)
-
-        monkeypatch.chdir(bench)
-        result = runner.invoke(cli, ["migrate"])
-
-        assert result.exit_code == 1
-
-
 # ── grunt auth ──────────────────────────────────────────────────
 
 
@@ -312,32 +214,6 @@ class TestAuth:
 
 
 class TestApp:
-    @patch("subprocess.run", return_value=MagicMock(returncode=0))
-    def test_app_install_local(self, mock_run, runner, tmp_path):
-        bench = tmp_path / "bench"
-        (bench / "apps" / "grunt").mkdir(parents=True)
-        (bench / "apps" / "my_app").mkdir(parents=True)
-        site = bench / "sites" / "test-site"
-        site.mkdir(parents=True)
-        (site / "grunt.site").write_text(json.dumps({"installed_apps": ["grunt"]}))
-        (site / ".env").write_text("DEBUG=true\n")
-
-        with patch("grunt_cli.helpers.get_bench_dir", return_value=bench):
-            result = runner.invoke(cli, ["app", "install", "my_app", "--site", "test-site"])
-
-        assert result.exit_code == 0, result.output
-        cmd = mock_run.call_args.args[0]
-        assert "_do_install('my_app', site='test-site')" in cmd[-1]
-        assert mock_run.call_args.kwargs["env"]["DOTENV_PATH"] == str(site / ".env")
-
-    def test_app_install_unknown_app(self, runner, tmp_path):
-        bench = tmp_path / "bench"
-        (bench / "apps").mkdir(parents=True)
-        with patch("grunt_cli.helpers.get_bench_dir", return_value=bench):
-            result = runner.invoke(cli, ["app", "install", "nope"])
-        assert result.exit_code != 0
-        assert "не знайдено" in result.output
-
     @patch("grunt_cli.helpers.subprocess.run")
     def test_app_get(self, mock_run, runner, tmp_path):
         mock_run.return_value = MagicMock(returncode=0, stderr="")
@@ -388,130 +264,6 @@ class TestApp:
         assert github_repo_path("https://github.com/owner/repo/") == "owner/repo"
         assert github_repo_path("git@github.com:owner/repo.git") is None
         assert github_repo_path("https://gitlab.com/owner/repo") is None
-
-
-# ── grunt doctype ───────────────────────────────────────────────
-
-
-class TestDoctype:
-    @patch("grunt_cli.commands.doctype.venv_delegate", return_value=0)
-    def test_doctype_list_delegates_to_framework(self, mock_delegate, runner):
-        result = runner.invoke(cli, ["doctype", "list", "--module", "Core"])
-        assert result.exit_code == 0
-        mock_delegate.assert_called_once_with("doctype", "list", "--module", "Core", site=None)
-
-    @patch("grunt_cli.commands.doctype.venv_delegate", return_value=-1)
-    def test_doctype_list_outside_project(self, _delegate, runner):
-        result = runner.invoke(cli, ["doctype", "list"])
-        assert "Backend CLI не знайдено" in result.output
-
-    @patch("grunt_cli.commands.doctype.find_doctype_json", return_value=None)
-    def test_doctype_show_not_found(self, _find, runner):
-        result = runner.invoke(cli, ["doctype", "show", "NonExistent"])
-        assert result.exit_code != 0
-        assert "не знайдено" in result.output
-
-    @patch("grunt_cli.commands.doctype.find_doctype_json")
-    def test_doctype_show_fields(self, mock_find, runner):
-        mock_find.return_value = {
-            "name": "User",
-            "module": "Core",
-            "fields": [
-                {"fieldname": "email", "label": "Email", "fieldtype": "Data", "required": 1},
-                {"fieldname": "sb", "fieldtype": "Section"},
-            ],
-        }
-        result = runner.invoke(cli, ["doctype", "show", "User"])
-        assert result.exit_code == 0
-        assert "email" in result.output
-        assert "sb" not in result.output
-
-
-# ── grunt sites ──────────────────────────────────────────────────
-
-
-class TestSites:
-    def test_sites_list_no_bench_no_site(self, runner):
-        with (
-            patch("grunt_cli.commands.sites.get_bench_dir", return_value=None),
-        ):
-            result = runner.invoke(cli, ["sites", "list"])
-            assert result.exit_code == 0
-            assert "не знайдено" in result.output
-
-    def test_sites_list_with_sites(self, runner, tmp_path):
-        bench = tmp_path / "bench"
-        (bench / "apps").mkdir(parents=True)
-        sites_dir = bench / "sites"
-        site = sites_dir / "my-site"
-        site.mkdir(parents=True)
-        (site / "grunt.site").write_text(json.dumps({"installed_apps": ["grunt"]}))
-
-        with patch("grunt_cli.commands.sites.get_bench_dir", return_value=bench):
-            result = runner.invoke(cli, ["sites", "list"])
-            assert result.exit_code == 0
-            assert "my-site" in result.output
-
-    def test_sites_list_empty(self, runner, tmp_path):
-        bench = tmp_path / "bench"
-        (bench / "apps").mkdir(parents=True)
-        (bench / "sites").mkdir(parents=True)
-
-        with patch("grunt_cli.commands.sites.get_bench_dir", return_value=bench):
-            result = runner.invoke(cli, ["sites", "list"])
-            assert result.exit_code == 0
-            assert "не знайдено" in result.output
-
-    @patch("grunt_cli.commands.sites.run_mise", return_value=True)
-    def test_sites_new(self, mock_mise, runner, tmp_path):
-        bench = tmp_path / "bench"
-        (bench / "apps" / "grunt").mkdir(parents=True)
-        (bench / "sites").mkdir(parents=True)
-
-        with patch("grunt_cli.commands.sites.get_bench_dir", return_value=bench):
-            result = runner.invoke(cli, ["sites", "new", "test-site"])
-            assert result.exit_code == 0, result.output
-            site_dir = bench / "sites" / "test-site"
-            assert (site_dir / "grunt.site").exists()
-            assert (site_dir / ".env").exists()
-            assert (bench / "sites" / "currentsite.txt").read_text() == "test-site"
-        mock_mise.assert_called_once_with(
-            bench / "apps" / "grunt", "db:migrate", env={"DOTENV_PATH": str(site_dir / ".env")}
-        )
-
-    def test_sites_new_already_exists(self, runner, tmp_path):
-        bench = tmp_path / "bench"
-        (bench / "apps").mkdir(parents=True)
-        site = bench / "sites" / "existing"
-        site.mkdir(parents=True)
-
-        with patch("grunt_cli.commands.sites.get_bench_dir", return_value=bench):
-            result = runner.invoke(cli, ["sites", "new", "existing"])
-            assert result.exit_code != 0
-
-    def test_sites_use(self, runner, tmp_path):
-        bench = tmp_path / "bench"
-        (bench / "apps").mkdir(parents=True)
-        site = bench / "sites" / "my-site"
-        site.mkdir(parents=True)
-        (site / "grunt.site").write_text("{}")
-
-        with patch("grunt_cli.commands.sites.get_bench_dir", return_value=bench):
-            result = runner.invoke(cli, ["sites", "use", "my-site"])
-            assert result.exit_code == 0
-            assert (bench / "sites" / "currentsite.txt").read_text() == "my-site"
-
-    def test_sites_drop(self, runner, tmp_path):
-        bench = tmp_path / "bench"
-        (bench / "apps").mkdir(parents=True)
-        site = bench / "sites" / "doomed"
-        site.mkdir(parents=True)
-        (site / "grunt.site").write_text("{}")
-
-        with patch("grunt_cli.commands.sites.get_bench_dir", return_value=bench):
-            result = runner.invoke(cli, ["sites", "drop", "doomed", "--force"])
-            assert result.exit_code == 0
-            assert not site.exists()
 
 
 # ── grunt update ────────────────────────────────────────────────
@@ -998,11 +750,41 @@ class TestFrameworkDelegation:
         assert result.exit_code == 0, result.output
         assert mock_run.call_args.args[0][-4:] == ["app", "create", "my_app", "--no-git"]
 
+    @pytest.mark.parametrize(
+        "args",
+        [
+            # колись мали власні (дубльовані) реалізації в grunt-cli
+            ["migrate", "--site", "s1", "--no-alembic"],
+            ["db", "backup", "--site", "s1"],
+            ["db", "rollback", "2"],
+            ["doctype", "sync-types", "--all", "--app", "crm"],
+            ["fixtures", "dump", "Invoice", "--limit", "5"],
+            ["site", "create", "s2"],
+            ["sites", "new", "s2"],
+            ["users", "list"],
+            ["shell"],
+            ["test", "crm", "-k", "smoke"],
+            ["lint", "--format", "json", "-j", "2"],
+            ["app", "uninstall", "crm", "--keep-data"],
+        ],
+    )
+    @patch(
+        "grunt_cli.helpers.get_venv_grunt",
+        return_value=["/bench/apps/grunt/.venv/bin/python", "-m", "grunt.cli.main"],
+    )
+    @patch("subprocess.run")
+    def test_framework_commands_are_forwarded_verbatim(self, mock_run, _venv, runner, args):
+        mock_run.return_value = MagicMock(returncode=3)
+        result = runner.invoke(cli, args)
+        assert result.exit_code == 3, result.output
+        assert mock_run.call_args.args[0][3:] == args
+
     @patch("grunt_cli.helpers.get_venv_grunt", return_value=None)
     def test_unknown_command_outside_project(self, _venv, runner):
-        result = runner.invoke(cli, ["data"])
+        result = runner.invoke(cli, ["migrate"])
         assert result.exit_code != 0
         assert "No such command" in result.output
+        assert "bench-проєкту" in result.output
 
 
 class TestRestart:
