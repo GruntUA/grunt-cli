@@ -176,8 +176,8 @@ class TestDb:
 
 
 class TestMigrate:
-    """`grunt migrate` runs alembic (core tables) then delegates DocType/fixture
-    sync to `grunt migrate` in the project venv — no duplicate implementation."""
+    """`grunt migrate` only delegates to `grunt migrate` in the project venv -
+    Alembic runs there, per site; a second run here doubled it."""
 
     def _make_bench(self, tmp_path: Path) -> Path:
         bench = tmp_path / "bench"
@@ -185,7 +185,6 @@ class TestMigrate:
         venv_bin = app_dir / ".venv" / "bin"
         venv_bin.mkdir(parents=True)
         (app_dir / "alembic.ini").write_text("[alembic]\n")
-        (venv_bin / "alembic").touch()
         (venv_bin / "python").touch()
 
         site_a = bench / "sites" / "a.local"
@@ -205,18 +204,9 @@ class TestMigrate:
         result = runner.invoke(cli, ["migrate"])
 
         assert result.exit_code == 0
-        assert mock_run.call_count == 2
+        mock_run.assert_called_once()  # no separate alembic run
 
-        alembic_cmd = mock_run.call_args_list[0][0][0]
-        assert alembic_cmd[0].endswith("/apps/grunt/.venv/bin/alembic")
-        assert alembic_cmd[1:] == [
-            "-c",
-            str(bench / "apps" / "grunt" / "alembic.ini"),
-            "upgrade",
-            "head",
-        ]
-
-        delegated_cmd = mock_run.call_args_list[1][0][0]
+        delegated_cmd = mock_run.call_args[0][0]
         assert delegated_cmd[0].endswith("/apps/grunt/.venv/bin/python")
         assert delegated_cmd[1:] == ["-m", "grunt.cli.main", "migrate"]
 
@@ -226,10 +216,12 @@ class TestMigrate:
         mock_run.return_value = MagicMock(returncode=0)
 
         monkeypatch.chdir(bench)
-        result = runner.invoke(cli, ["migrate", "--site", "a.local", "--dry-run"])
+        result = runner.invoke(
+            cli, ["migrate", "--site", "a.local", "--dry-run", "--no-alembic"]
+        )
 
         assert result.exit_code == 0
-        delegated_cmd = mock_run.call_args_list[1][0][0]
+        delegated_cmd = mock_run.call_args[0][0]
         assert delegated_cmd[1:] == [
             "-m",
             "grunt.cli.main",
@@ -237,12 +229,11 @@ class TestMigrate:
             "--site",
             "a.local",
             "--dry-run",
+            "--no-alembic",
         ]
 
     @patch("grunt_cli.commands.migrate.subprocess.run")
-    def test_migrate_alembic_failure_stops_before_delegating(
-        self, mock_run, runner, tmp_path, monkeypatch
-    ):
+    def test_migrate_propagates_exit_code(self, mock_run, runner, tmp_path, monkeypatch):
         bench = self._make_bench(tmp_path)
         mock_run.return_value = MagicMock(returncode=1)
 
@@ -250,7 +241,6 @@ class TestMigrate:
         result = runner.invoke(cli, ["migrate"])
 
         assert result.exit_code == 1
-        assert mock_run.call_count == 1  # never reaches the delegated call
 
 
 # ── grunt auth ──────────────────────────────────────────────────
