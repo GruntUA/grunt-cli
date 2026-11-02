@@ -1,4 +1,7 @@
-"""grunt upgrade — оновлення залежностей до найновіших версій з оновленням файлів версій."""
+"""grunt upgrade — найновіші версії залежностей (розробка); --in-range — лише lock-файли.
+
+``grunt update`` ставить рівно закомічене; версії міняє лише ця команда.
+"""
 
 from __future__ import annotations
 
@@ -15,15 +18,18 @@ from grunt_cli import helpers
 from grunt_cli.commands.restart import installed_units
 from grunt_cli.commands.update import (
     _MANAGED_RCLONE,
+    _PACKAGE_GROUPS,
     _cleanup_runtimes,
     _find_apps_dir,
     _get_cli_dir,
+    _outdated_packages,
     _print_cleanup_summary,
     _project_uv,
-    _restart_production,
     _run_migrations,
+    _run_npm_install,
     _runtime_dir,
     _step,
+    _update_python_packages,
 )
 from grunt_cli.helpers import (
     FRAMEWORK_CLI_MODULE,
@@ -206,7 +212,7 @@ def _upgrade_runtimes(dry_run: bool = False) -> None:
         console.print("  [yellow]⚠[/yellow]  mise не знайдено, пропускаю")
     else:
         if dry_run:
-            console.print("  [dim][dry-run] mise self-update[/dim]")
+            console.print("  [dim]\\[dry-run] mise self-update[/dim]")
         else:
             _step([mise_bin, "self-update", "--yes"], "mise оновлено", quiet=True)
 
@@ -215,14 +221,14 @@ def _upgrade_runtimes(dry_run: bool = False) -> None:
     if mise_bin:
         runtime_dir = _runtime_dir() or Path.home()
         if dry_run:
-            console.print("  [dim][dry-run] mise upgrade uv[/dim]")
+            console.print("  [dim]\\[dry-run] mise upgrade uv[/dim]")
         else:
             run_mise(runtime_dir, "upgrade", "uv", quiet=True)
             run_mise(runtime_dir, "install", "uv@latest", quiet=True)
             console.print("  [green]✓[/green] uv оновлено через mise")
     elif uv_bin:
         if dry_run:
-            console.print("  [dim][dry-run] uv self update[/dim]")
+            console.print("  [dim]\\[dry-run] uv self update[/dim]")
         else:
             _step([uv_bin, "self", "update"], "uv оновлено", quiet=True)
 
@@ -235,7 +241,7 @@ def _upgrade_runtimes(dry_run: bool = False) -> None:
 
     if rclone_bin:
         if dry_run:
-            console.print("  [dim][dry-run] rclone selfupdate[/dim]")
+            console.print("  [dim]\\[dry-run] rclone selfupdate[/dim]")
         else:
             _step([rclone_bin, "selfupdate"], "rclone оновлено", quiet=True)
     else:
@@ -270,7 +276,7 @@ def _upgrade_runtimes(dry_run: bool = False) -> None:
                 console.print(f"  [green]✓[/green] package.json: {', '.join(changes)}")
 
         if dry_run:
-            console.print(f"  [dim][dry-run] mise install node@{latest_node}[/dim]")
+            console.print(f"  [dim]\\[dry-run] mise install node@{latest_node}[/dim]")
         else:
             status = f"Встановлюю Node.js {latest_node} (mise)..."
             if run_mise(
@@ -291,7 +297,7 @@ def _upgrade_runtimes(dry_run: bool = False) -> None:
     if uv_bin:
         latest_py, py_minor = _get_latest_python_version()
         if dry_run:
-            console.print("  [dim][dry-run] uv python upgrade[/dim]")
+            console.print("  [dim]\\[dry-run] uv python upgrade[/dim]")
         else:
             _step([uv_bin, "python", "upgrade"], "Python оновлено", quiet=True)
             if py_minor:
@@ -375,7 +381,7 @@ def _upgrade_node_packages(dry_run: bool = False) -> None:
             console.print(f"    [dim]… і ще {len(upgrades) - 12} пакетів[/dim]")
 
         if dry_run:
-            console.print("  [dim][dry-run] npm install пропущено[/dim]")
+            console.print("  [dim]\\[dry-run] npm install пропущено[/dim]")
         else:
             # 2. Встановлення нових пакетів і оновлення package-lock.json
             inst_status = f"Встановлюю пакети та оновлюю package-lock.json ({rel_path})..."
@@ -443,7 +449,7 @@ def _upgrade_python_packages(dry_run: bool = False) -> None:
 
     # 3. Синхронізація venv
     if dry_run:
-        console.print("  [dim][dry-run] uv sync пропущено[/dim]")
+        console.print("  [dim]\\[dry-run] uv sync пропущено[/dim]")
     else:
         sync_status = "Синхронізую Python пакети (uv sync --all-extras --inexact)..."
         if (
@@ -500,8 +506,8 @@ def _upgrade_python_packages(dry_run: bool = False) -> None:
                             console.print(f"  [green]✓[/green] {app_dir.name}: оновлено {n_chg}")
 
 
-def _upgrade_cli_itself(dry_run: bool = False) -> None:
-    """Оновити залежності самого grunt-cli та перевстановити його."""
+def _upgrade_cli_itself(dry_run: bool = False, latest: bool = False) -> None:
+    """Оновити uv.lock самого grunt-cli (з *latest* — і pyproject.toml) та перевстановити його."""
     console.print("[bold cyan]CLI (grunt-cli)[/bold cyan]")
     cli_dir = _get_cli_dir()
     if not cli_dir or not (cli_dir / "pyproject.toml").exists():
@@ -514,7 +520,7 @@ def _upgrade_cli_itself(dry_run: bool = False) -> None:
         run_captured([uv_bin, "lock", "--upgrade"], cwd=cli_dir, status=status)
 
     lock_file = cli_dir / "uv.lock"
-    if lock_file.exists():
+    if latest and lock_file.exists():
         import tomllib
 
         lock_data = tomllib.loads(lock_file.read_text(encoding="utf-8"))
@@ -530,7 +536,7 @@ def _upgrade_cli_itself(dry_run: bool = False) -> None:
             )
 
     if dry_run:
-        console.print("  [dim][dry-run] Перевстановлення grunt-cli пропущено[/dim]")
+        console.print("  [dim]\\[dry-run] Перевстановлення grunt-cli пропущено[/dim]")
     else:
         run_captured([uv_bin, "sync"], cwd=cli_dir, status="Синхронізую venv grunt-cli...")
         run_captured(
@@ -541,11 +547,108 @@ def _upgrade_cli_itself(dry_run: bool = False) -> None:
         console.print("  [green]✓[/green] grunt-cli актуалізовано")
 
 
+def _show(lines: list[str]) -> None:
+    for line in lines[:15]:
+        console.print(f"    [dim]{line}[/dim]")
+    if len(lines) > 15:
+        console.print(f"    [dim]… і ще {len(lines) - 15}[/dim]")
+
+
+def _upgrade_in_range(python: bool, node: bool, dry_run: bool = False) -> None:
+    """Найновіші версії в межах діапазонів pyproject.toml/package.json: лише
+    lock-файли (``uv lock --upgrade`` + ``grunt app deps --upgrade``,
+    ``npm update``). Оновлює лише екосистему, де новіші версії справді є."""
+    console.print("[bold cyan]Пакети в межах діапазонів (uv.lock, package-lock.json)[/bold cyan]")
+    console.print("  [dim]Перевіряю новіші версії пакетів...[/dim]")
+    outdated, majors = _outdated_packages()
+    wanted = {"python"} if python else set()
+    if node:
+        wanted.add("npm")
+    outdated = {g: lines for g, lines in outdated.items() if _PACKAGE_GROUPS[g][0] in wanted}
+
+    if node and majors:
+        console.print(
+            f"  [dim]Node.js — поза діапазонами package.json ({len(majors)}, "
+            "grunt upgrade без --in-range):[/dim]"
+        )
+        _show(majors)
+    if not outdated:
+        console.print("  [green]✓[/green] Пакети — найновіших версій, які дозволяють діапазони")
+        return
+    for group, lines in outdated.items():
+        console.print(
+            f"  [yellow]![/yellow] {_PACKAGE_GROUPS[group][1]}: новіші версії {len(lines)}"
+        )
+        _show(lines)
+    if dry_run:
+        return
+
+    ecosystems = {_PACKAGE_GROUPS[group][0] for group in outdated}
+    if "python" in ecosystems:
+        _update_python_packages(upgrade=True)
+    apps_dir = _find_apps_dir()
+    if "npm" in ecosystems and apps_dir and (apps_dir / "grunt").is_dir():
+        _run_npm_install(apps_dir / "grunt", upgrade=True)
+
+
+def _npm_audit(dry_run: bool = False) -> None:
+    """``npm audit fix`` фреймворку (без --force — у межах package.json) і
+    зведення вразливостей, що лишились. Тут, а не в grunt update: fix
+    переписує package-lock.json, а update його не чіпає."""
+    apps_dir = _find_apps_dir()
+    grunt_dir = apps_dir / "grunt" if apps_dir else None
+    if grunt_dir is None or not (grunt_dir / "package-lock.json").is_file():
+        return
+    mise = get_mise_bin()
+    npm = [mise, "exec", "--", "npm"] if mise else [shutil.which("npm") or "npm"]
+
+    def run(args: list[str], status: str) -> str:
+        # npm audit виходить з кодом 1, поки вразливості є, — дивимось лише на вивід
+        try:
+            with console.status(f"[dim]{status}[/dim]", spinner="dots"):
+                return subprocess.run(
+                    [*npm, *args], cwd=grunt_dir, capture_output=True, text=True, timeout=300
+                ).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+
+    if not dry_run:
+        run(["audit", "fix", "--no-fund"], "Виправляю вразливості npm (npm audit fix)...")
+    try:
+        counts = json.loads(run(["audit", "--json"], "Перевіряю вразливості npm (npm audit)..."))
+        counts = counts["metadata"]["vulnerabilities"]
+    except (ValueError, KeyError, TypeError):
+        console.print("  [yellow]⚠[/yellow]  npm audit: не вдалося отримати звіт")
+        return
+    total = counts.get("total", 0)
+    if not total:
+        console.print("  [green]✓[/green] npm audit: вразливостей немає")
+        return
+    levels = ", ".join(
+        f"{level} {counts[level]}"
+        for level in ("critical", "high", "moderate", "low")
+        if counts.get(level)
+    )
+    console.print(f"  [yellow]![/yellow] npm audit: вразливостей {total} ({levels})")
+    if dry_run:
+        console.print("  [dim]Частину виправить grunt upgrade (npm audit fix)[/dim]")
+    console.print(
+        "  [dim]Поза діапазонами package.json — grunt upgrade без --in-range"
+        " або вручну (npm audit)[/dim]"
+    )
+
+
 _UPGRADE_COMPONENTS = ("all", "runtimes", "packages", "python", "node")
 
 
 @click.command()
 @click.argument("component", required=False, type=click.Choice(_UPGRADE_COMPONENTS), default="all")
+@click.option(
+    "--in-range",
+    is_flag=True,
+    default=False,
+    help="Лише lock-файли в межах діапазонів pyproject.toml/package.json, без рантаймів",
+)
 @click.option(
     "--dry-run",
     "-n",
@@ -606,6 +709,7 @@ _UPGRADE_COMPONENTS = ("all", "runtimes", "packages", "python", "node")
 )
 def upgrade(
     component: str,
+    in_range: bool,
     dry_run: bool,
     skip_runtimes: bool,
     skip_packages: bool,
@@ -616,36 +720,57 @@ def upgrade(
     keep_old: bool,
     verbose: bool,
 ) -> None:
-    """⚡ Оновити всі залежності до найновіших версій.
+    """⚡ Оновити залежності до найновіших версій (розробка; потім закомітити).
 
     \b
-    Оновлює до найновіших версій:
-      • Системні інструменти: mise, uv, Node.js, Python, rclone
-      • Файли конфігурації версій: mise.toml, package.json, pyproject.toml
-      • Lock-файли та пакети: uv.lock, package-lock.json
-      • Залежності всіх додатків проєкту та самого grunt-cli
+    Оновлює:
+      • Системні інструменти: mise, uv, Node.js, Python, rclone (mise.toml)
+      • npm пакети, зокрема мажорні (npm-check-updates, package.json)
+      • Python пакети: uv.lock і нижні межі в pyproject.toml
+      • Залежності додатків і самого grunt-cli; npm audit fix
+
+    \b
+    --in-range — обережніше: найновіші версії лише в межах діапазонів
+    pyproject.toml і package.json, змінюються тільки lock-файли (uv.lock,
+    package-lock.json), рантайми не чіпає.
+
+    \b
+    grunt update версій не змінює: ставить рівно закомічені lock-файли. На
+    проді grunt upgrade заборонено — новіші версії приходять релізом
+    фреймворку.
 
     \b
     Приклади:
-      grunt upgrade                 оновити все
-      grunt upgrade --dry-run       подивитися, які версії оновляться
-      grunt upgrade runtimes        тільки системні інструменти (uv, mise, node, python, rclone)
-      grunt upgrade packages        тільки пакети та їхні файли версій
-      grunt upgrade python          тільки Python і його пакети
-      grunt upgrade node            тільки Node.js та npm пакети
+      grunt upgrade                 оновити все до найновіших версій
+      grunt upgrade --dry-run       подивитися, що оновиться
+      grunt upgrade --in-range      лише lock-файли в межах діапазонів
+      grunt upgrade runtimes        тільки системні інструменти
+      grunt upgrade python          тільки Python пакети
+      grunt upgrade node            тільки npm пакети
       grunt upgrade --skip-migrate  без міграцій БД
     """
     helpers.VERBOSE = verbose
 
-    console.print("[bold]⚡ Grunt Upgrade — Оновлення залежностей до найновіших версій[/bold]")
+    bench = get_bench_dir()
+    if bench and installed_units(bench):
+        raise click.UsageError(
+            "grunt upgrade — лише в розробці: на проді пакети ставляться за lock-файлами"
+            " з релізу фреймворку (grunt update)"
+        )
+    if component == "runtimes" and in_range:
+        raise click.UsageError(
+            "У межах mise.toml рантайми оновлює grunt update --deps;"
+            " змінити версії в mise.toml — grunt upgrade runtimes"
+        )
+    latest = not in_range
+
+    title = "найновіші версії" if latest else "в межах діапазонів"
+    console.print(f"[bold]⚡ Grunt Upgrade — оновлення залежностей ({title})[/bold]")
     if dry_run:
         console.print("  [yellow]Режим перегляду (--dry-run): файли не будуть змінені[/yellow]")
     console.print()
 
-    bench = get_bench_dir()
-    production = bool(bench and installed_units(bench))
-
-    do_runtimes = not skip_runtimes and component in ("all", "runtimes")
+    do_runtimes = latest and not skip_runtimes and component in ("all", "runtimes")
     do_python = (
         not skip_python
         and not (skip_packages and component == "all")
@@ -656,42 +781,43 @@ def upgrade(
         and not (skip_packages and component == "all")
         and component in ("all", "packages", "node")
     )
-    do_cli = not skip_cli and component in ("all",)
+    do_cli = not skip_cli and component == "all"
 
     # 1. Системні рантайми (mise, uv, node, python, rclone)
     if do_runtimes:
         _upgrade_runtimes(dry_run=dry_run)
         console.print()
 
-    # 2. Node.js пакети & package.json
-    if do_node:
-        _upgrade_node_packages(dry_run=dry_run)
+    # 2. Пакети: найновіші з файлами версій або, з --in-range, лише lock-файли
+    if latest:
+        if do_node:
+            _upgrade_node_packages(dry_run=dry_run)
+            console.print()
+        if do_python:
+            _upgrade_python_packages(dry_run=dry_run)
+            console.print()
+    elif do_python or do_node:
+        _upgrade_in_range(python=do_python, node=do_node, dry_run=dry_run)
         console.print()
 
-    # 3. Python пакети & pyproject.toml + uv.lock
-    if do_python:
-        _upgrade_python_packages(dry_run=dry_run)
+    # 3. Вразливості npm — після оновлення пакетів, щоб fix бачив новий lock
+    if do_node:
+        console.print("[bold cyan]Вразливості npm[/bold cyan]")
+        _npm_audit(dry_run=dry_run)
         console.print()
 
     # 4. Сам grunt-cli
     if do_cli:
-        _upgrade_cli_itself(dry_run=dry_run)
+        _upgrade_cli_itself(dry_run=dry_run, latest=latest)
         console.print()
 
     # 5. Міграції БД
-    migrated = True
     if not skip_migrate and not dry_run and (do_python or do_node):
         console.print("[bold cyan]Міграція БД[/bold cyan]")
-        migrated = _run_migrations(None)
+        _run_migrations(None)
         console.print()
 
-    # 6. Перезапуск сервісів (якщо прод)
-    if production and not dry_run:
-        console.print("[bold cyan]Перезапуск сервісів[/bold cyan]")
-        _restart_production(migrated)
-        console.print()
-
-    # 7. Прибирання старих рантаймів
+    # 6. Прибирання старих рантаймів
     if not keep_old and not dry_run and do_runtimes:
         console.print("[bold cyan]Прибирання[/bold cyan]")
         removed, kept, notes = _cleanup_runtimes()
@@ -702,3 +828,5 @@ def upgrade(
         console.print()
 
     console.print("[bold green]✅ Grunt Upgrade завершено[/bold green]")
+    if not dry_run:
+        console.print("  [dim]Перевірте зміни й закомітьте lock-файли (git diff)[/dim]")

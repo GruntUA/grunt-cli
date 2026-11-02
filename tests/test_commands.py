@@ -1212,24 +1212,17 @@ class TestUpgradePackages:
         monkeypatch.setattr("grunt_cli.commands.restart.SYSTEMD_DIR", systemd)
         monkeypatch.chdir(bench)
 
-        result = runner.invoke(cli, ["update", "--upgrade-packages"])
+        result = runner.invoke(cli, ["upgrade"])
 
         assert result.exit_code != 0
         assert "лише в розробці" in result.output
 
 
-class TestAskUpgradePackages:
-    """Розробка: grunt update сам показує новіші пакети й питає про lock-файли."""
+class TestHintOutdated:
+    """Розробка: grunt update лише показує новіші пакети — версії міняє grunt upgrade."""
 
     @staticmethod
-    def _run(
-        runner,
-        tmp_path,
-        monkeypatch,
-        *args,
-        outdated=None,
-        answer="y",
-    ):
+    def _run(runner, tmp_path, monkeypatch, *args, outdated=None):
         if outdated is None:
             outdated = {"python": ["aiohttp 3.14.4 → 3.14.5"]}
         bench = tmp_path / "dev"
@@ -1239,63 +1232,49 @@ class TestAskUpgradePackages:
         systemd.mkdir()
         monkeypatch.setattr("grunt_cli.commands.restart.SYSTEMD_DIR", systemd)
         monkeypatch.chdir(bench)
-        monkeypatch.setattr("grunt_cli.commands.update._interactive", lambda: True)
         with (
             patch(
                 "grunt_cli.commands.update._outdated_packages",
                 return_value=(outdated, ["vitest 4.1.11 → 5.0.4"]),
-            ),
+            ) as check,
             patch("grunt_cli.commands.update._update_python_packages") as packages,
             patch("grunt_cli.commands.update._run_npm_install") as npm,
             patch("grunt_cli.commands.update._run_migrations", return_value=True),
             patch("grunt_cli.commands.update._get_cli_dir", return_value=None),
             patch("grunt_cli.commands.update._git_pull", return_value=True),
         ):
-            result = runner.invoke(
-                cli, ["update", "--framework", "--no-deps", *args], input=f"{answer}\n"
-            )
-        result.npm = npm
+            result = runner.invoke(cli, ["update", "--framework", "--no-deps", *args])
+        result.check, result.npm = check, npm
         return result, packages
 
-    def test_asks_and_upgrades(self, runner, tmp_path, monkeypatch):
+    def test_hints_without_upgrading(self, runner, tmp_path, monkeypatch):
         result, packages = self._run(runner, tmp_path, monkeypatch)
         assert result.exit_code == 0, result.output
-        assert "aiohttp 3.14.4 → 3.14.5" in result.output
-        assert "vitest 4.1.11 → 5.0.4" in result.output  # мажорна — лише для довідки
-        assert "Python — фреймворк (uv.lock)" in result.output
-        assert "Оновити uv.lock (потім" in result.output
-        packages.assert_called_once_with(upgrade=True)
-        # у npm новіших немає — його не оновлюємо
+        assert "Python — фреймворк (uv.lock): новіші версії 1" in result.output
+        assert "Оновити: grunt upgrade (лише lock-файли: --in-range" in result.output
+        assert "(grunt upgrade)" in result.output  # мажорна vitest
+        packages.assert_called_once_with()
         assert all(not c.kwargs.get("upgrade") for c in result.npm.call_args_list)
 
-    def test_only_npm_outdated(self, runner, tmp_path, monkeypatch):
-        result, packages = self._run(
-            runner, tmp_path, monkeypatch, outdated={"npm": ["vue 3.5.1 → 3.5.4"]}
-        )
+    def test_nothing_outdated(self, runner, tmp_path, monkeypatch):
+        result, _ = self._run(runner, tmp_path, monkeypatch, outdated={})
         assert result.exit_code == 0, result.output
-        assert "Node.js — npm (package-lock.json)" in result.output
-        assert "Оновити package-lock.json" in result.output
-        packages.assert_called_once_with(upgrade=False)
-        result.npm.assert_called_once()
-        assert result.npm.call_args.kwargs == {"upgrade": True}
+        assert "Оновити lock-файли" not in result.output
 
-    def test_declined(self, runner, tmp_path, monkeypatch):
-        result, packages = self._run(runner, tmp_path, monkeypatch, answer="n")
+    @pytest.mark.parametrize("flag", ["--skip-outdated", "--no-upgrade-packages"])
+    def test_opt_out(self, runner, tmp_path, monkeypatch, flag):
+        result, packages = self._run(runner, tmp_path, monkeypatch, flag)
         assert result.exit_code == 0, result.output
-        packages.assert_called_once_with(upgrade=False)
+        result.check.assert_not_called()
+        packages.assert_called_once_with()
 
-    def test_nothing_outdated_no_question(self, runner, tmp_path, monkeypatch):
-        result, packages = self._run(runner, tmp_path, monkeypatch, outdated={})
-        assert "найновіших версій" in result.output
-        assert "Оновити uv.lock" not in result.output
-        packages.assert_called_once_with(upgrade=False)
-
-    def test_opt_out(self, runner, tmp_path, monkeypatch):
-        with patch("grunt_cli.commands.update._ask_upgrade_packages") as ask:
-            result, packages = self._run(runner, tmp_path, monkeypatch, "--no-upgrade-packages")
+    def test_deprecated_flag_runs_upgrade(self, runner, tmp_path, monkeypatch):
+        with patch("grunt_cli.commands.upgrade.upgrade.callback") as upgrade:
+            result, packages = self._run(runner, tmp_path, monkeypatch, "--upgrade-packages")
         assert result.exit_code == 0, result.output
-        ask.assert_not_called()
-        packages.assert_called_once_with(upgrade=False)
+        assert "застарів — це grunt upgrade --in-range" in result.output
+        assert upgrade.call_args.kwargs["in_range"] is True
+        packages.assert_not_called()
 
 
 class TestDepsFingerprint:
@@ -1590,12 +1569,20 @@ class TestUpgrade:
         assert "--skip-runtimes" in result.output
         assert "--skip-packages" in result.output
 
-    def test_update_upgrade_flag_help(self, runner):
+    def test_upgrade_flags_moved_out_of_update(self, runner):
         from grunt_cli.main import cli
 
         result = runner.invoke(cli, ["update", "--help"])
         assert result.exit_code == 0
-        assert "--upgrade" in result.output
+        assert "--upgrade" not in result.output
+        assert "--in-range" in runner.invoke(cli, ["upgrade", "--help"]).output
+
+    def test_runtimes_not_in_range(self, runner):
+        from grunt_cli.main import cli
+
+        result = runner.invoke(cli, ["upgrade", "runtimes", "--in-range"])
+        assert result.exit_code != 0
+        assert "grunt update --deps" in result.output
 
     def test_update_pyproject_deps(self, tmp_path):
         from grunt_cli.commands.upgrade import _update_pyproject_deps
@@ -1644,19 +1631,44 @@ class TestUpgrade:
 
     @patch("grunt_cli.commands.upgrade._cleanup_runtimes", return_value=([], [], []))
     @patch("grunt_cli.commands.upgrade._run_migrations", return_value=True)
+    @patch("grunt_cli.commands.upgrade._npm_audit")
+    @patch("grunt_cli.commands.upgrade._upgrade_in_range")
     @patch("grunt_cli.commands.upgrade._upgrade_cli_itself")
     @patch("grunt_cli.commands.upgrade._upgrade_python_packages")
     @patch("grunt_cli.commands.upgrade._upgrade_node_packages")
     @patch("grunt_cli.commands.upgrade._upgrade_runtimes")
     def test_upgrade_dry_run_invokes_steps(
-        self, mock_runtimes, mock_node, mock_py, mock_cli, _migrate, _cleanup, runner
+        self,
+        mock_runtimes,
+        mock_node,
+        mock_py,
+        mock_cli,
+        mock_range,
+        mock_audit,
+        _migrate,
+        _cleanup,
+        runner,
     ):
         from grunt_cli.main import cli
 
+        # За замовчуванням — найновіші версії, з рантаймами
         result = runner.invoke(cli, ["upgrade", "--dry-run"])
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         assert "Grunt Upgrade" in result.output
         mock_runtimes.assert_called_once_with(dry_run=True)
         mock_node.assert_called_once_with(dry_run=True)
         mock_py.assert_called_once_with(dry_run=True)
-        mock_cli.assert_called_once_with(dry_run=True)
+        mock_audit.assert_called_once_with(dry_run=True)
+        mock_cli.assert_called_once_with(dry_run=True, latest=True)
+        mock_range.assert_not_called()
+
+        # --in-range — лише lock-файли в межах діапазонів
+        for mock in (mock_runtimes, mock_node, mock_py, mock_cli):
+            mock.reset_mock()
+        result = runner.invoke(cli, ["upgrade", "--in-range", "--dry-run"])
+        assert result.exit_code == 0, result.output
+        mock_range.assert_called_once_with(python=True, node=True, dry_run=True)
+        mock_cli.assert_called_once_with(dry_run=True, latest=False)
+        mock_runtimes.assert_not_called()
+        mock_node.assert_not_called()
+        mock_py.assert_not_called()

@@ -953,7 +953,7 @@ _PACKAGE_GROUPS = {
 def _outdated_packages() -> tuple[dict[str, list[str]], list[str]]:
     """``({група: оновлення}, мажорні)`` пакетів фреймворку й додатків.
 
-    Оновлення — те, що візьме --upgrade-packages, за групами _PACKAGE_GROUPS:
+    Оновлення — те, що візьме grunt upgrade, за групами _PACKAGE_GROUPS:
     ``uv lock --upgrade`` (у межах діапазонів, заблоковане чужим піном — ні),
     пакети лише додатків (``grunt app deps --outdated``) і ``npm update``
     (wanted). Мажорні — npm версії поза діапазонами package.json: їх
@@ -1032,43 +1032,27 @@ def _interactive() -> bool:
     return sys.stdin.isatty()
 
 
-_LOCK_FILES = {"python": "uv.lock", "npm": "package-lock.json"}
-
-
-def _ask_upgrade_packages() -> set[str]:
-    """Розробка: показати новіші версії пакетів за групами й спитати, чи
-    оновити lock-файли. Повертає екосистеми ("python", "npm"), які оновити, —
-    лише ті, де новіші версії справді є."""
+def _hint_outdated() -> None:
+    """Розробка: сказати, чи є новіші версії пакетів. Змінює їх лише
+    grunt upgrade — update ставить рівно закомічені lock-файли."""
     console.print("  [dim]Перевіряю новіші версії пакетів...[/dim]")
     outdated, majors = _outdated_packages()
-
-    def show(lines: list[str]) -> None:
-        for line in lines[:15]:
-            console.print(f"    [dim]{line}[/dim]")
-        if len(lines) > 15:
-            console.print(f"    [dim]… і ще {len(lines) - 15}[/dim]")
-
-    if majors:
-        console.print(
-            f"  [dim]Node.js — поза діапазонами package.json ({len(majors)}, міняти вручну):[/dim]"
-        )
-        show(majors)
-    if not outdated:
-        console.print("  [green]✓[/green] Пакети — найновіших версій, які дозволяють діапазони")
-        return set()
+    if not outdated and not majors:
+        console.print("  [green]✓[/green] Пакети — найновіших версій")
+        return
     for group, lines in outdated.items():
         console.print(
             f"  [yellow]![/yellow] {_PACKAGE_GROUPS[group][1]}: новіші версії {len(lines)}"
         )
-        show(lines)
-    ecosystems = {_PACKAGE_GROUPS[group][0] for group in outdated}
-    if not _interactive():
-        console.print("  [dim]Оновити lock-файли: grunt update --upgrade-packages[/dim]")
-        return set()
-    locks = " і ".join(_LOCK_FILES[e] for e in ("python", "npm") if e in ecosystems)
-    if click.confirm(f"  Оновити {locks} (потім закомітити)?", default=True):
-        return ecosystems
-    return set()
+    if outdated:
+        console.print(
+            "  [dim]Оновити: grunt upgrade (лише lock-файли: --in-range;"
+            " переглянути: --dry-run)[/dim]"
+        )
+    if majors:
+        console.print(
+            f"  [dim]Node.js — поза діапазонами package.json: {len(majors)} (grunt upgrade)[/dim]"
+        )
 
 
 def _run_npm_install(app_dir: Path, upgrade: bool = False) -> bool:
@@ -1095,14 +1079,16 @@ def _run_npm_install(app_dir: Path, upgrade: bool = False) -> bool:
         return False
 
     status = f"Встановлюю npm пакети ({app_dir.name})..."
-    no_lock = [*npm_run, "install", "--no-package-lock"]
+    # Без звіту audit/fund: виправити його тут не можна (див. нижче) — це grunt upgrade.
+    install = [*npm_run, "install", "--no-audit", "--no-fund"]
+    no_lock = [*install, "--no-package-lock"]
 
     if _package_lock_stale(app_dir):
         # Із застарілим lock звичайний install гарантовано впаде з ERESOLVE —
         # одразу розв'язуємо за package.json.
         _warn_stale_lock(app_dir.name)
     else:
-        result = run_captured([*npm_run, "install"], cwd=app_dir, status=status)
+        result = run_captured(install, cwd=app_dir, status=status)
         # Без `npm audit fix`: він переписує закомічений package-lock.json фреймворку,
         # і наступний git pull конфліктує. Версії пакетів приходять лише з lock-файла.
         if result == 0:
@@ -1407,24 +1393,16 @@ _COMPONENTS = ("cli", "framework", "apps", "deps")
     default=False,
     help="Оновити системні залежності (Python, Node.js тощо)",
 )
+# Застарілі: версії тепер міняє grunt upgrade.
+@click.option("--upgrade", "do_upgrade", is_flag=True, default=False, hidden=True)
+@click.option("--upgrade-packages", is_flag=True, default=False, hidden=True)
 @click.option(
-    "--upgrade",
-    "do_upgrade",
-    is_flag=True,
-    default=False,
-    help="Оновити всі залежності та файли версій до останьої версії (еквівалент grunt upgrade)",
-)
-@click.option(
-    "--upgrade-packages",
-    is_flag=True,
-    default=False,
-    help="Розробка: оновити uv.lock і package-lock.json до найновіших версій (потім закомітити)",
-)
-@click.option(
+    "--skip-outdated",
     "--no-upgrade-packages",
+    "skip_outdated",
     is_flag=True,
     default=False,
-    help="Розробка: не перевіряти й не пропонувати новіші версії пакетів",
+    help="Розробка: не перевіряти новіші версії пакетів",
 )
 @click.option("--skip-os", is_flag=True, default=False, help="Не перевіряти оновлення ОС (apt)")
 @click.option("--skip-packages", is_flag=True, default=False, help="Не оновлювати Python пакети")
@@ -1485,7 +1463,7 @@ def update(
     update_deps: bool,
     do_upgrade: bool,
     upgrade_packages: bool,
-    no_upgrade_packages: bool,
+    skip_outdated: bool,
     skip_os: bool,
     skip_packages: bool,
     skip_npm: bool,
@@ -1553,31 +1531,27 @@ def update(
       grunt update --tag            фреймворк і додатки — на найновіші релізи
       grunt update framework --tag v0.2.0   закріпити (або відкотити) версію
       grunt update --branch         голова гілки замість релізів
-      grunt update --upgrade        найновіші версії залежностей (grunt upgrade)
-      grunt update --upgrade-packages   розробка: найновіші пакети без питання
       grunt update -v               повний вивід підпроцесів (для діагностики)
       grunt update --full           не пропускати кроки без змін
 
     \b
-    Пакети на проді ставляться рівно за закоміченими lock-файлами: новіші
-    версії приходять релізом фреймворку (--upgrade-packages там заборонено —
-    брудне дерево зупинило б наступне оновлення). У розробці grunt update
-    сам показує новіші версії пакетів і питає, чи оновити lock-файли
-    (без терміналу — лише показує; --no-upgrade-packages — не перевіряти).
+    Пакети ставляться рівно за закоміченими lock-файлами — update версій не
+    змінює. Новіші версії: на проді — релізом фреймворку, у розробці —
+    grunt upgrade (update лише показує, що вони є; --skip-outdated — не
+    перевіряти).
     """
-    if do_upgrade:
+    if do_upgrade or upgrade_packages:
         from grunt_cli.commands.upgrade import upgrade as upgrade_cmd
 
-        ctx = click.get_current_context()
-        ctx.invoke(
+        old = "--upgrade" if do_upgrade else "--upgrade-packages"
+        new = "grunt upgrade" if do_upgrade else "grunt upgrade --in-range"
+        console.print(f"[yellow]⚠[/yellow]  grunt update {old} застарів — це {new}")
+        click.get_current_context().invoke(
             upgrade_cmd,
-            component="all",
-            dry_run=False,
-            skip_runtimes=False,
+            in_range=upgrade_packages,
             skip_packages=skip_packages,
             skip_python=skip_packages,
             skip_node=skip_npm,
-            skip_cli=False,
             skip_migrate=skip_migrate,
             keep_old=keep_old,
             verbose=verbose,
@@ -1585,17 +1559,10 @@ def update(
         return
 
     helpers.VERBOSE = verbose
-    if upgrade_packages and no_upgrade_packages:
-        raise click.UsageError("--upgrade-packages і --no-upgrade-packages взаємовиключні")
     if tag is not None and follow_branch:
         raise click.UsageError("--tag і --branch взаємовиключні")
     bench = get_bench_dir()
     production = bool(bench and installed_units(bench))
-    if upgrade_packages and production:
-        raise click.UsageError(
-            "--upgrade-packages — лише в розробці: на проді пакети ставляться за lock-файлами"
-            " з релізу фреймворку"
-        )
     app_tag = None if tag is None else "latest"
     # Відкат із --force іде після відновлення бекапу — базу треба мігрувати.
     state = _State(full=full or force)
@@ -1758,12 +1725,10 @@ def update(
 
     # ── 5. Python пакети ────────────────────────────────────────────
     # У розробці новіші версії пакетів не чекають, доки про них згадають:
-    # grunt update сам показує їх і питає (на проді — лише за lock-файлами).
-    # Оновлюємо лише екосистему, де є новіші версії: решта — за lock-файлами.
-    to_upgrade = {"python", "npm"} if upgrade_packages else set()
-    if not (production or upgrade_packages or skip_packages or no_upgrade_packages):
+    # update показує, що вони є, а оновлює lock-файли grunt upgrade.
+    if not (production or skip_packages or skip_outdated):
         console.print("[bold cyan]Новіші пакети[/bold cyan]")
-        to_upgrade = _ask_upgrade_packages()
+        _hint_outdated()
         console.print()
 
     if not skip_packages:
@@ -1772,16 +1737,13 @@ def update(
         key = f"packages:{_find_apps_dir()}"
         fp = _deps_fingerprint(*project) if project else None
         apps_fp = _deps_fingerprint(*(d for d in project if d.name != "grunt"))
-        if "python" in to_upgrade:
-            if _update_python_packages(upgrade=True):
-                state.mark(key, _deps_fingerprint(*_project_dirs()))
-        elif state.fresh(key, fp):
+        if state.fresh(key, fp):
             console.print("  [green]✓[/green] Python пакети: без змін")
         elif apps_fp_at_deps == apps_fp:
             # Додатки після `mise run deps` фреймворку не змінились — вона все й поставила.
             console.print("  [green]✓[/green] Python пакети вже встановлені (mise run deps)")
             state.mark(key, fp)
-        elif _update_python_packages(upgrade=False):
+        elif _update_python_packages():
             state.mark(key, _deps_fingerprint(*_project_dirs()))
         _install_pdf_browser()
         updated_something = True
@@ -1796,12 +1758,12 @@ def update(
         apps_dir = _find_apps_dir()
         grunt_dir = apps_dir / "grunt" if apps_dir else None
         key = f"npm:{grunt_dir}"
-        if framework_deps_done and "npm" not in to_upgrade:
+        if framework_deps_done:
             console.print("  [green]✓[/green] npm пакети вже встановлені (mise run deps)")
         elif grunt_dir and grunt_dir.exists():
-            if "npm" not in to_upgrade and state.fresh(key, _deps_fingerprint(grunt_dir)):
+            if state.fresh(key, _deps_fingerprint(grunt_dir)):
                 console.print("  [green]✓[/green] npm пакети: без змін")
-            elif _run_npm_install(grunt_dir, upgrade="npm" in to_upgrade):
+            elif _run_npm_install(grunt_dir):
                 state.mark(key, _deps_fingerprint(grunt_dir))
             updated_something = True
         else:
