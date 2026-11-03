@@ -189,7 +189,8 @@ def _get_latest_python_version() -> tuple[str | None, str | None]:
             m.group(1)
             for line in out.splitlines()
             if "freethreaded" not in line
-            for m in [re.search(r"cpython-(\d+\.\d+\.\d+)", line)]
+            # "-" одразу після версії відсікає пре-релізи (3.16.0a1, 3.16.0rc2)
+            for m in [re.search(r"cpython-(\d+\.\d+\.\d+)-", line)]
             if m
         }
         if versions:

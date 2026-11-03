@@ -1145,6 +1145,24 @@ class TestRuntimes:
         mock_run.assert_not_called()
 
 
+class TestLatestPython:
+    @patch("grunt_cli.commands.upgrade.find_uv", return_value="/usr/bin/uv")
+    @patch("grunt_cli.commands.upgrade._project_uv", return_value=None)
+    @patch("grunt_cli.commands.upgrade.subprocess.run")
+    def test_skips_prereleases(self, mock_run, _puv, _uv):
+        from grunt_cli.commands import upgrade
+
+        mock_run.return_value = MagicMock(
+            stdout=(
+                "cpython-3.16.0a1-linux-x86_64-gnu    <download available>\n"
+                "cpython-3.16.0a1+freethreaded-linux-x86_64-gnu    <download available>\n"
+                "cpython-3.15.2-linux-x86_64-gnu    <download available>\n"
+                "cpython-3.14.10-linux-x86_64-gnu    /usr/bin/python3.14\n"
+            )
+        )
+        assert upgrade._get_latest_python_version() == ("3.15.2", "3.15")
+
+
 class TestProjectUv:
     """uv для проєкту — з mise.toml фреймворку, навіть коли grunt update
     запущено з кореня бенча, де mise-шим uv не знає версії."""
