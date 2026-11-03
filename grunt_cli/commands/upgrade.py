@@ -348,8 +348,10 @@ def _upgrade_node_packages(dry_run: bool = False) -> None:
         )
         console.print(f"  [dim]Перевіряю {rel_path}/package.json...[/dim]")
 
-        # 1. Запуск ncu для аналізу та оновлення package.json
-        cmd = [*exec_prefix, "npx", "-y", "npm-check-updates", "--jsonUpgraded"]
+        # 1. Запуск ncu для аналізу та оновлення package.json.
+        # --peer: не пропонувати версії, що ламають peer-залежності (напр. typescript 7
+        # при typescript-eslint з peer <6.1.0) — інакше npm install падає з ERESOLVE.
+        cmd = [*exec_prefix, "npx", "-y", "npm-check-updates", "--jsonUpgraded", "--peer"]
         if not dry_run:
             cmd.append("-u")
 
