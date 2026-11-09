@@ -320,6 +320,88 @@ def _upgrade_runtimes(dry_run: bool = False) -> None:
                     )
 
 
+_NPM_MANIFESTS = ("package.json", "package-lock.json")
+
+
+def _read_npm_manifests(target: Path) -> dict[str, str]:
+    """Вміст package.json і package-lock.json (ті, що є) — для відкату."""
+    return {
+        name: (target / name).read_text(encoding="utf-8")
+        for name in _NPM_MANIFESTS
+        if (target / name).is_file()
+    }
+
+
+def _lock_groups(upgrades: dict[str, str]) -> set[str]:
+    """Що прибрати з package-lock.json для повторної спроби: для пакета зі
+    scope — увесь scope (``@tiptap/``: розширення tiptap мають точні peer на
+    core і переходять на нову версію лише всі разом), інакше — сам пакет."""
+    return {pkg.split("/")[0] + "/" if pkg.startswith("@") else pkg for pkg in upgrades}
+
+
+def _drop_lock_entries(target: Path, upgrades: dict[str, str]) -> int:
+    """Прибрати з package-lock.json записи оновлених пакетів (з їхніми scope),
+    щоб npm розв'язав їх заново за package.json. Повертає кількість прибраних."""
+    lock_path = target / "package-lock.json"
+    if not lock_path.is_file():
+        return 0
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    packages: dict = lock.get("packages", {})
+    groups = _lock_groups(upgrades)
+
+    def stale(key: str) -> bool:
+        name = key.rsplit("node_modules/", 1)[-1] if "node_modules/" in key else ""
+        return any(name == g or (g.endswith("/") and name.startswith(g)) for g in groups)
+
+    kept = {key: value for key, value in packages.items() if not stale(key)}
+    dropped = len(packages) - len(kept)
+    if dropped:
+        lock["packages"] = kept
+        lock_path.write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
+    return dropped
+
+
+def _install_upgraded(
+    target: Path,
+    upgrades: dict[str, str],
+    originals: dict[str, str],
+    exec_prefix: list[str],
+    rel_path: str,
+) -> bool:
+    """``npm install`` після ncu: package-lock.json має збігтися з новим package.json.
+
+    Старий lock часто не дає оновити пакети по одному (ERESOLVE: точні peer-
+    залежності, як у tiptap) — тоді друга спроба без записів оновлених пакетів
+    у lock. Не вдалося й так — package.json і lock повертаються як були:
+    закомічений package.json без свого lock валить ``npm ci`` у CI.
+    """
+    install = [*exec_prefix, "npm", "install"]
+    status = f"Встановлюю пакети та оновлюю package-lock.json ({rel_path})..."
+    if run_captured(install, cwd=target, status=status) == 0:
+        console.print(f"  [green]✓[/green] {rel_path}: package.json та package-lock.json оновлено")
+        return True
+
+    if _drop_lock_entries(target, upgrades):
+        console.print(
+            f"  [dim]{rel_path}: повторна спроба — оновлені пакети розв'язуються заново "
+            "(без їхніх записів у package-lock.json)...[/dim]"
+        )
+        if run_captured(install, cwd=target, status=status) == 0:
+            console.print(
+                f"  [green]✓[/green] {rel_path}: package.json та package-lock.json оновлено"
+            )
+            return True
+
+    for name, text in originals.items():
+        (target / name).write_text(text, encoding="utf-8")
+    console.print(
+        f"  [red]✗[/red] {rel_path}: npm install не вдався — package.json і "
+        "package-lock.json повернуто як були. Деталі вище; оновіть проблемні "
+        "пакети вручну (npm install <пакет>@latest) і закомітьте обидва файли."
+    )
+    return False
+
+
 def _upgrade_node_packages(dry_run: bool = False) -> None:
     """Оновити package.json та npm пакети до найновіших версій через npm-check-updates."""
     console.print("[bold cyan]Node.js пакети (package.json)[/bold cyan]")
@@ -356,6 +438,9 @@ def _upgrade_node_packages(dry_run: bool = False) -> None:
         if not dry_run:
             cmd.append("-u")
 
+        # Що повернути, якщо npm install після ncu не вдасться.
+        originals = _read_npm_manifests(target)
+
         status = f"Оновлюю версії у {target.name}/package.json (ncu)..."
         try:
             with console.status(f"[dim]{status}[/dim]", spinner="dots"):
@@ -387,16 +472,7 @@ def _upgrade_node_packages(dry_run: bool = False) -> None:
             console.print("  [dim]\\[dry-run] npm install пропущено[/dim]")
         else:
             # 2. Встановлення нових пакетів і оновлення package-lock.json
-            inst_status = f"Встановлюю пакети та оновлюю package-lock.json ({rel_path})..."
-            npm_res = run_captured([*exec_prefix, "npm", "install"], cwd=target, status=inst_status)
-            if npm_res == 0:
-                console.print(
-                    f"  [green]✓[/green] {rel_path}: package.json та package-lock.json оновлено"
-                )
-            else:
-                console.print(
-                    f"  [yellow]⚠[/yellow]  {rel_path}: npm install завершився з кодом {npm_res}"
-                )
+            _install_upgraded(target, upgrades, originals, exec_prefix, str(rel_path))
 
 
 def _upgrade_python_packages(dry_run: bool = False) -> None:
