@@ -20,7 +20,7 @@ grunt = "grunt_cli.main:cli"
 # A dependency group, not an extra: uv installs `dev` by default (uv sync,
 # uv run), so a venv rebuilt after a Python upgrade still has pytest and ruff.
 [dependency-groups]
-dev = ["pytest>=9.2.0", "ruff>=0.17.4"]
+dev = ["pytest>=9.2.0", "ruff>=0.17.5"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
