@@ -19,6 +19,7 @@ from grunt_cli.commands.restart import installed_units
 from grunt_cli.commands.update import (
     _MANAGED_RCLONE,
     _PACKAGE_GROUPS,
+    _backup_before_migrate,
     _cleanup_runtimes,
     _find_apps_dir,
     _get_cli_dir,
@@ -36,6 +37,7 @@ from grunt_cli.helpers import (
     console,
     find_uv,
     get_bench_dir,
+    get_current_site_name,
     get_mise_bin,
     run_captured,
     run_mise,
@@ -774,6 +776,11 @@ _UPGRADE_COMPONENTS = ("all", "runtimes", "packages", "python", "node")
     help="Не запускати міграції БД після оновлення",
 )
 @click.option(
+    "--backup/--no-backup",
+    default=None,
+    help="Резервна копія бази перед міграціями (типово — спитати; без терміналу — так)",
+)
+@click.option(
     "--keep-old",
     is_flag=True,
     default=False,
@@ -796,6 +803,7 @@ def upgrade(
     skip_node: bool,
     skip_cli: bool,
     skip_migrate: bool,
+    backup: bool | None,
     keep_old: bool,
     verbose: bool,
 ) -> None:
@@ -827,6 +835,11 @@ def upgrade(
       grunt upgrade python          тільки Python пакети
       grunt upgrade node            тільки npm пакети
       grunt upgrade --skip-migrate  без міграцій БД
+
+    \b
+    Перед міграціями — резервна копія бази поточного сайту (grunt db backup
+    --no-files): спитає (типово «так»); --backup / --no-backup — без питання.
+    Копія не вдалась — міграцію не запускає.
     """
     helpers.VERBOSE = verbose
 
@@ -891,9 +904,22 @@ def upgrade(
         console.print()
 
     # 5. Міграції БД
+    migrated = True
+    backup_note: str | None = None
     if not skip_migrate and not dry_run and (do_python or do_node):
         console.print("[bold cyan]Міграція БД[/bold cyan]")
-        _run_migrations(None)
+        site_name = get_current_site_name()
+        snapshot = _backup_before_migrate(site_name, backup)
+        if snapshot is False:
+            migrated = False  # no copy - no migration
+        else:
+            migrated = _run_migrations(site_name)
+            if isinstance(snapshot, str):
+                on_site = f" --site {site_name}" if site_name else ""
+                backup_note = (
+                    f"Копія бази перед міграцією: {snapshot} — відкат: "
+                    f"grunt db restore {snapshot}{on_site}"
+                )
         console.print()
 
     # 6. Прибирання старих рантаймів
@@ -906,6 +932,13 @@ def upgrade(
             _print_cleanup_summary(removed, kept, notes)
         console.print()
 
+    if backup_note:
+        console.print(f"[dim]{backup_note}[/dim]")
+    if not migrated:
+        console.print(
+            "[bold red]✗ Grunt Upgrade завершено з помилками[/bold red] — міграцію не виконано"
+        )
+        raise SystemExit(1)
     console.print("[bold green]✅ Grunt Upgrade завершено[/bold green]")
     if not dry_run:
         console.print("  [dim]Перевірте зміни й закомітьте lock-файли (git diff)[/dim]")
