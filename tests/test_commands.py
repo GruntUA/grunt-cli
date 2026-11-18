@@ -375,6 +375,7 @@ class TestUpdate:
         run.assert_not_called()
 
     @patch("grunt_cli.commands.update._restart_production", return_value=True)
+    @patch("grunt_cli.commands.update._backup_before_migrate", new=lambda *a: None)
     @patch("grunt_cli.commands.update._run_migrations", return_value=True)
     @patch("grunt_cli.commands.update._run_npm_install")
     @patch("grunt_cli.commands.update._update_python_packages")
@@ -393,6 +394,7 @@ class TestUpdate:
         assert "Директорію додатків не знайдено" in result.output
 
     @patch("grunt_cli.commands.update._restart_production", return_value=True)
+    @patch("grunt_cli.commands.update._backup_before_migrate", new=lambda *a: None)
     @patch("grunt_cli.commands.update._run_migrations", return_value=True)
     @patch("grunt_cli.commands.update._run_npm_install")
     @patch("grunt_cli.commands.update._update_python_packages")
@@ -418,6 +420,7 @@ class TestUpdate:
         assert order == ["runtimes", "deps grunt"]
 
     @patch("grunt_cli.commands.update._restart_production", return_value=True)
+    @patch("grunt_cli.commands.update._backup_before_migrate", new=lambda *a: None)
     @patch("grunt_cli.commands.update._run_migrations", return_value=True)
     @patch("grunt_cli.commands.update._run_npm_install")
     @patch("grunt_cli.commands.update._update_python_packages")
@@ -534,6 +537,7 @@ class TestUpdateRestart:
 
     @patch("grunt_cli.commands.update.restart_units", return_value=True)
     @patch("grunt_cli.commands.update.run_mise", return_value=True)
+    @patch("grunt_cli.commands.update._backup_before_migrate", new=lambda *a: None)
     @patch("grunt_cli.commands.update._run_migrations", return_value=True)
     def test_production_builds_and_restarts(
         self, _migrate, mock_mise, mock_restart, runner, tmp_path, monkeypatch
@@ -559,6 +563,26 @@ class TestUpdateRestart:
         mock_restart.assert_not_called()
 
     @patch("grunt_cli.commands.update.restart_units")
+    @patch("grunt_cli.commands.update._run_migrations", return_value=False)
+    def test_failed_migration_in_development_fails(
+        self, _migrate, _restart, runner, tmp_path, monkeypatch
+    ):
+        """Без сервісів перезапуск «вдається», але зірвана міграція — помилка."""
+        self._bench(tmp_path, monkeypatch, ())
+        result = self._run(runner)
+        assert result.exit_code != 0
+        assert "Оновлення завершено з помилками" in result.output
+
+    @patch("grunt_cli.commands.update.restart_units")
+    @patch("grunt_cli.commands.update._run_migrations", return_value=True)
+    def test_restore_hint_names_the_site(self, _migrate, _restart, runner, tmp_path, monkeypatch):
+        self._bench(tmp_path, monkeypatch, ())
+        result = self._run(runner, "--site", "other.site")
+        assert result.exit_code == 0, result.output
+        assert "20261118-000000 --site other.site" in " ".join(result.output.split())
+
+    @patch("grunt_cli.commands.update.restart_units")
+    @patch("grunt_cli.commands.update._backup_before_migrate", new=lambda *a: None)
     @patch("grunt_cli.commands.update._run_migrations", return_value=True)
     def test_development_does_not_restart(
         self, _migrate, mock_restart, runner, tmp_path, monkeypatch
@@ -570,6 +594,7 @@ class TestUpdateRestart:
         mock_restart.assert_not_called()
 
     @patch("grunt_cli.commands.update.restart_units")
+    @patch("grunt_cli.commands.update._backup_before_migrate", new=lambda *a: None)
     @patch("grunt_cli.commands.update._run_migrations", return_value=True)
     def test_no_restart_flag(self, _migrate, mock_restart, runner, tmp_path, monkeypatch):
         self._bench(tmp_path, monkeypatch, ("mlt_prod-web.service",))
@@ -579,6 +604,7 @@ class TestUpdateRestart:
 
     @patch("grunt_cli.commands.update.restart_units", return_value=True)
     @patch("grunt_cli.commands.update.run_mise", return_value=True)
+    @patch("grunt_cli.commands.update._backup_before_migrate", new=lambda *a: None)
     @patch("grunt_cli.commands.update._run_migrations", return_value=True)
     def test_unchanged_code_skips_migrate_and_restart(
         self, mock_migrate, _mise, mock_restart, runner, tmp_path, monkeypatch
@@ -1261,6 +1287,7 @@ class TestHintOutdated:
             ) as check,
             patch("grunt_cli.commands.update._update_python_packages") as packages,
             patch("grunt_cli.commands.update._run_npm_install") as npm,
+            patch("grunt_cli.commands.update._backup_before_migrate", return_value=None),
             patch("grunt_cli.commands.update._run_migrations", return_value=True),
             patch("grunt_cli.commands.update._get_cli_dir", return_value=None),
             patch("grunt_cli.commands.update._git_pull", return_value=True),
@@ -1513,6 +1540,7 @@ class TestCleanup:
     @patch("grunt_cli.commands.update._update_python_packages")
     @patch("grunt_cli.commands.update._run_npm_install")
     @patch("grunt_cli.commands.update._update_runtimes")
+    @patch("grunt_cli.commands.update._backup_before_migrate", new=lambda *a: None)
     @patch("grunt_cli.commands.update._run_migrations", return_value=True)
     @patch("grunt_cli.commands.update._get_cli_dir", return_value=None)
     @patch("grunt_cli.commands.update._find_apps_dir", return_value=None)
