@@ -525,6 +525,10 @@ class TestUpdateRestart:
             patch("grunt_cli.commands.update._update_runtimes"),
             patch("grunt_cli.commands.update._get_cli_dir", return_value=None),
             patch("grunt_cli.commands.update._git_pull", return_value=True),
+            patch(
+                "grunt_cli.commands.update._backup_before_migrate",
+                return_value="20261118-000000",
+            ),
         ):
             return runner.invoke(cli, ["update", "--framework", "--no-deps", *args])
 
@@ -1690,3 +1694,43 @@ class TestUpgrade:
         mock_runtimes.assert_not_called()
         mock_node.assert_not_called()
         mock_py.assert_not_called()
+
+
+class TestBackupBeforeMigrate:
+    """Копія бази перед міграцією: без неї (коли просили) міграції немає."""
+
+    @staticmethod
+    def _bench(tmp_path, monkeypatch):
+        bench = tmp_path / "bench"
+        (bench / "apps" / "grunt").mkdir(parents=True)
+        monkeypatch.setattr("grunt_cli.commands.update.get_bench_dir", lambda: bench)
+        monkeypatch.setattr("grunt_cli.helpers.get_venv_grunt", lambda: ["grunt"])
+        monkeypatch.setattr("grunt_cli.helpers.get_dotenv_path", lambda: None)
+        monkeypatch.setattr("grunt_cli.helpers.get_current_site_name", lambda: "s1")
+
+    def test_not_wanted(self):
+        from grunt_cli.commands.update import _backup_before_migrate
+
+        with patch("grunt_cli.commands.update.subprocess.run") as run:
+            assert _backup_before_migrate(None, False) is None
+        run.assert_not_called()
+
+    def test_id_from_the_output(self, tmp_path, monkeypatch):
+        from grunt_cli.commands.update import _backup_before_migrate
+
+        self._bench(tmp_path, monkeypatch)
+        done = subprocess.CompletedProcess(
+            [], 0, stdout="database  /x/backups/20261118-073112-database.sqlite.zst\n"
+        )
+        with patch("grunt_cli.commands.update.subprocess.run", return_value=done) as run:
+            assert _backup_before_migrate(None, True) == "20261118-073112"
+        cmd = run.call_args.args[0]
+        assert cmd[:4] == ["grunt", "db", "backup", "--no-files"] and cmd[-2:] == ["--site", "s1"]
+
+    def test_failed_copy_stops_the_migration(self, tmp_path, monkeypatch):
+        from grunt_cli.commands.update import _backup_before_migrate
+
+        self._bench(tmp_path, monkeypatch)
+        failed = subprocess.CompletedProcess([], 1, stdout="disk full")
+        with patch("grunt_cli.commands.update.subprocess.run", return_value=failed):
+            assert _backup_before_migrate(None, True) is False
