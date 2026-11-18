@@ -1723,9 +1723,39 @@ class TestBackupBeforeMigrate:
             [], 0, stdout="database  /x/backups/20261118-073112-database.sqlite.zst\n"
         )
         with patch("grunt_cli.commands.update.subprocess.run", return_value=done) as run:
-            assert _backup_before_migrate(None, True) == "20261118-073112"
+            assert _backup_before_migrate("s1", True) == "20261118-073112"
         cmd = run.call_args.args[0]
         assert cmd[:4] == ["grunt", "db", "backup", "--no-files"] and cmd[-2:] == ["--site", "s1"]
+
+    def test_id_from_the_file_name_not_the_path(self, tmp_path, monkeypatch):
+        """Каталог сайту, схожий на id, не плутає розбір."""
+        from grunt_cli.commands.update import _backup_before_migrate
+
+        self._bench(tmp_path, monkeypatch)
+        out = (
+            "config    /s/20200101-000000-database/backups/20261118-073112-config.env.zst\n"
+            "database  /s/20200101-000000-database/backups/20261118-073112-database.sqlite.zst\n"
+        )
+        done = subprocess.CompletedProcess([], 0, stdout=out)
+        with patch("grunt_cli.commands.update.subprocess.run", return_value=done):
+            assert _backup_before_migrate("s1", True) == "20261118-073112"
+
+    def test_launch_error_stops_the_migration(self, tmp_path, monkeypatch):
+        from grunt_cli.commands.update import _backup_before_migrate
+
+        self._bench(tmp_path, monkeypatch)
+        with patch("grunt_cli.commands.update.subprocess.run", side_effect=PermissionError("x")):
+            assert _backup_before_migrate("s1", True) is False
+
+    def test_no_database_yet_does_not_block(self, tmp_path, monkeypatch):
+        """Сайт без бази (create --no-migrate): копіювати нічого, міграція йде."""
+        from grunt_cli.commands.update import _backup_before_migrate
+
+        self._bench(tmp_path, monkeypatch)
+        out = "FileNotFoundError: [Errno 2] No such file or directory: '/b/sites/s1/grunt.db'\n"
+        failed = subprocess.CompletedProcess([], 1, stdout=out)
+        with patch("grunt_cli.commands.update.subprocess.run", return_value=failed):
+            assert _backup_before_migrate("s1", True) is None
 
     def test_failed_copy_stops_the_migration(self, tmp_path, monkeypatch):
         from grunt_cli.commands.update import _backup_before_migrate
@@ -1733,4 +1763,4 @@ class TestBackupBeforeMigrate:
         self._bench(tmp_path, monkeypatch)
         failed = subprocess.CompletedProcess([], 1, stdout="disk full")
         with patch("grunt_cli.commands.update.subprocess.run", return_value=failed):
-            assert _backup_before_migrate(None, True) is False
+            assert _backup_before_migrate("s1", True) is False

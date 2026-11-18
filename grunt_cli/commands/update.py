@@ -1120,17 +1120,34 @@ def _run_npm_install(app_dir: Path, upgrade: bool = False) -> bool:
     return False
 
 
-_BACKUP_ID = re.compile(r"(\d{8}-\d{6})-database")
+_BACKUP_FILE = re.compile(r"^(\d{8}-\d{6})-database\.")
+# Бази ще немає (сайт створено з --no-migrate): копіювати нічого.
+_NO_DATABASE = re.compile(r"No such file or directory: \S*grunt\.db|database \S+ does not exist")
+
+
+def _backup_id(output: str) -> str | None:
+    """Id копії з рядка ``database  <шлях>`` виводу ``grunt db backup``.
+
+    Беремо ім'я файлу, а не перший збіг у тексті: каталог сайту теж може
+    виглядати як id.
+    """
+    for line in output.splitlines():
+        kind, _, path = line.strip().partition(" ")
+        if kind == "database" and path.strip():
+            found = _BACKUP_FILE.match(Path(path.strip()).name)
+            if found:
+                return found.group(1)
+    return None
 
 
 def _backup_before_migrate(site: str | None, wanted: bool | None) -> str | bool | None:
-    """Резервна копія бази сайту перед міграціями (``grunt db backup --no-files``).
+    """Резервна копія бази сайту *site* перед міграціями (``grunt db backup --no-files``).
 
     *wanted*: True / False з ``--backup`` / ``--no-backup``; None — спитати в
     терміналі (типово «так»), без терміналу (скрипт, cron) — так.
 
-    Повертає id копії; None — копію не просили; False — копія не вдалась
-    (тоді міграцію не запускаємо: відкотитися не було б до чого).
+    Повертає id копії; None — копію не просили або бази ще немає; False —
+    копія не вдалась (тоді міграцію не запускаємо: відкотитися не було б до чого).
     """
     if wanted is None:
         wanted = not sys.stdin.isatty() or click.confirm(
@@ -1149,29 +1166,36 @@ def _backup_before_migrate(site: str | None, wanted: bool | None) -> str | bool 
     if dotenv:
         env["DOTENV_PATH"] = dotenv
     cmd = [*grunt_bin, "db", "backup", "--no-files"]
-    site_name = site or helpers.get_current_site_name()
-    if site_name:
-        cmd += ["--site", site_name]
-    with console.status("[dim]Роблю резервну копію бази...[/dim]", spinner="dots"):
-        result = subprocess.run(
-            cmd,
-            cwd=str(bench / "apps" / "grunt"),
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            errors="replace",
-            check=False,
-        )
-    found = _BACKUP_ID.search(result.stdout or "")
-    if result.returncode != 0 or not found:
-        console.print("  [red]✗[/red] Резервну копію не зроблено — міграцію не запущено")
-        tail = "\n".join((result.stdout or "").strip().splitlines()[-5:])
-        if tail:
-            console.print(f"    [dim]{tail}[/dim]")
+    if site:
+        cmd += ["--site", site]
+    try:
+        with console.status("[dim]Роблю резервну копію бази...[/dim]", spinner="dots"):
+            result = subprocess.run(
+                cmd,
+                cwd=str(bench / "apps" / "grunt"),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                errors="replace",
+                check=False,
+            )
+    except OSError as e:
+        console.print(f"  [red]✗[/red] Резервну копію не зроблено ({e}) — міграцію не запущено")
         return False
-    console.print(f"  [green]✓[/green] Резервна копія бази: {found.group(1)}")
-    return found.group(1)
+    output = result.stdout or ""
+    backup_id = _backup_id(output) if result.returncode == 0 else None
+    if backup_id:
+        console.print(f"  [green]✓[/green] Резервна копія бази: {backup_id}")
+        return backup_id
+    if result.returncode != 0 and _NO_DATABASE.search(output):
+        console.print("  [dim]Бази ще немає — копіювати нічого[/dim]")
+        return None
+    console.print("  [red]✗[/red] Резервну копію не зроблено — міграцію не запущено")
+    tail = "\n".join(output.strip().splitlines()[-5:])
+    if tail:
+        console.print(f"    [dim]{tail}[/dim]")
+    return False
 
 
 def _run_migrations(site: str | None) -> bool:
@@ -1844,7 +1868,12 @@ def update(
     code_fp = _code_fingerprint(_project_dirs())
     if not skip_migrate:
         console.print("[bold cyan]Міграція БД[/bold cyan]")
-        site_dir = get_current_site()
+        # Один сайт для відбитка, копії й міграції: --site або поточний.
+        site_name = site or helpers.get_current_site_name()
+        bench_dir = get_bench_dir()
+        site_dir = (
+            bench_dir / "sites" / site if site and bench_dir is not None else get_current_site()
+        )
         key = f"migrate:{site_dir}:{site or ''}"
         site_conf = site_dir / "grunt.site" if site_dir else None
         # Конфіг сайту — у ньому список встановлених додатків.
@@ -1858,17 +1887,18 @@ def update(
         if state.fresh(key, fp):
             console.print("  [green]✓[/green] Код не змінився з останньої міграції — пропущено")
         else:
-            snapshot = _backup_before_migrate(site, backup)
+            snapshot = _backup_before_migrate(site_name, backup)
             if snapshot is False:
                 migrated = False  # no copy - no migration
             else:
-                migrated = _run_migrations(site)
+                migrated = _run_migrations(site_name)
                 if migrated:
                     state.mark(key, fp)
                 if isinstance(snapshot, str):
+                    on_site = f" --site {site_name}" if site_name else ""
                     backup_note = (
                         f"Копія бази перед міграцією: {snapshot} — відкат: "
-                        f"grunt db restore {snapshot}"
+                        f"grunt db restore {snapshot}{on_site}"
                     )
         updated_something = True
         console.print()
@@ -1915,7 +1945,7 @@ def update(
         console.print(f"[dim]{backup_note}[/dim]")
     if not updated_something:
         console.print("[yellow]Нічого не оновлено[/yellow]")
-    elif restarted:
+    elif restarted and migrated:
         console.print("[bold green]✅ Оновлення завершено[/bold green]")
         _print_cleanup_summary(removed, kept, notes)
         if state.skipped:
