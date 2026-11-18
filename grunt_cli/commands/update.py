@@ -1120,6 +1120,84 @@ def _run_npm_install(app_dir: Path, upgrade: bool = False) -> bool:
     return False
 
 
+_BACKUP_FILE = re.compile(r"^(\d{8}-\d{6})-database\.")
+# Бази ще немає (сайт створено з --no-migrate): копіювати нічого.
+_NO_DATABASE = re.compile(r"No such file or directory: \S*grunt\.db|database \S+ does not exist")
+
+
+def _backup_id(output: str) -> str | None:
+    """Id копії з рядка ``database  <шлях>`` виводу ``grunt db backup``.
+
+    Беремо ім'я файлу, а не перший збіг у тексті: каталог сайту теж може
+    виглядати як id.
+    """
+    for line in output.splitlines():
+        kind, _, path = line.strip().partition(" ")
+        if kind == "database" and path.strip():
+            found = _BACKUP_FILE.match(Path(path.strip()).name)
+            if found:
+                return found.group(1)
+    return None
+
+
+def _backup_before_migrate(site: str | None, wanted: bool | None) -> str | bool | None:
+    """Резервна копія бази сайту *site* перед міграціями (``grunt db backup --no-files``).
+
+    *wanted*: True / False з ``--backup`` / ``--no-backup``; None — спитати в
+    терміналі (типово «так»), без терміналу (скрипт, cron) — так.
+
+    Повертає id копії; None — копію не просили або бази ще немає; False —
+    копія не вдалась (тоді міграцію не запускаємо: відкотитися не було б до чого).
+    """
+    if wanted is None:
+        wanted = not sys.stdin.isatty() or click.confirm(
+            "  Зробити резервну копію бази перед міграціями?", default=True
+        )
+    if not wanted:
+        console.print("  [dim]Без резервної копії (--no-backup)[/dim]")
+        return None
+    grunt_bin = helpers.get_venv_grunt()
+    bench = get_bench_dir()
+    if not grunt_bin or bench is None:
+        console.print("  [red]✗[/red] Резервна копія: backend venv не знайдено")
+        return False
+    env = {**os.environ}
+    dotenv = helpers.get_dotenv_path()
+    if dotenv:
+        env["DOTENV_PATH"] = dotenv
+    cmd = [*grunt_bin, "db", "backup", "--no-files"]
+    if site:
+        cmd += ["--site", site]
+    try:
+        with console.status("[dim]Роблю резервну копію бази...[/dim]", spinner="dots"):
+            result = subprocess.run(
+                cmd,
+                cwd=str(bench / "apps" / "grunt"),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                errors="replace",
+                check=False,
+            )
+    except OSError as e:
+        console.print(f"  [red]✗[/red] Резервну копію не зроблено ({e}) — міграцію не запущено")
+        return False
+    output = result.stdout or ""
+    backup_id = _backup_id(output) if result.returncode == 0 else None
+    if backup_id:
+        console.print(f"  [green]✓[/green] Резервна копія бази: {backup_id}")
+        return backup_id
+    if result.returncode != 0 and _NO_DATABASE.search(output):
+        console.print("  [dim]Бази ще немає — копіювати нічого[/dim]")
+        return None
+    console.print("  [red]✗[/red] Резервну копію не зроблено — міграцію не запущено")
+    tail = "\n".join(output.strip().splitlines()[-5:])
+    if tail:
+        console.print(f"    [dim]{tail}[/dim]")
+    return False
+
+
 def _run_migrations(site: str | None) -> bool:
     """Повна ``grunt migrate`` фреймворку: Alembic + DocType-таблиці + fixtures.
 
@@ -1409,6 +1487,11 @@ _COMPONENTS = ("cli", "framework", "apps", "deps")
 @click.option("--skip-npm", is_flag=True, default=False, help="Не встановлювати npm пакети")
 @click.option("--skip-migrate", is_flag=True, default=False, help="Не запускати міграції БД")
 @click.option(
+    "--backup/--no-backup",
+    default=None,
+    help="Резервна копія бази перед міграціями (типово — спитати; без терміналу — так)",
+)
+@click.option(
     "--no-deps", is_flag=True, default=False, help="Не встановлювати залежності після оновлення"
 )
 @click.option(
@@ -1468,6 +1551,7 @@ def update(
     skip_packages: bool,
     skip_npm: bool,
     skip_migrate: bool,
+    backup: bool | None,
     no_deps: bool,
     keep_old: bool,
     no_restart: bool,
@@ -1494,7 +1578,10 @@ def update(
          depends_on, ставить Python пакети фреймворку й додатків) +
          playwright install --only-shell chromium (Chromium для PDF)
       6. npm install
-      7. grunt migrate (Alembic + DocType-таблиці + fixtures)
+      7. резервна копія бази (grunt db backup --no-files; спитає, без терміналу —
+         зробить; --no-backup — без неї), далі grunt migrate (Alembic +
+         DocType-таблиці + fixtures). Копія не вдалась — міграції немає. Id
+         копії й команда відкату — у підсумку
       8. прод (є systemd-сервіси): mise run build + перезапуск сервісів
       9. прибирання: невикористані версії Python (uv) і mise-інструментів,
          кеші uv/npm раз на тиждень (--keep-old — не чистити)
@@ -1526,6 +1613,7 @@ def update(
       grunt update --skip-os        без перевірки оновлень ОС
       grunt update --apps           тільки додатки + пакети + міграції
       grunt update --skip-migrate   без міграцій БД
+      grunt update --no-backup      без резервної копії бази перед міграціями
       grunt update --no-restart     без збірки фронтенду й перезапуску (прод)
       grunt update --no-deps        без перевстановлення залежностей
       grunt update --tag            фреймворк і додатки — на найновіші релізи
@@ -1775,11 +1863,17 @@ def update(
 
     # ── 7. Міграція БД ──────────────────────────────────────────────
     migrated = True
+    backup_note: str | None = None
     # Відбиток коду рахуємо після пакетів: npm/uv могли переписати lock-файли.
     code_fp = _code_fingerprint(_project_dirs())
     if not skip_migrate:
         console.print("[bold cyan]Міграція БД[/bold cyan]")
-        site_dir = get_current_site()
+        # Один сайт для відбитка, копії й міграції: --site або поточний.
+        site_name = site or helpers.get_current_site_name()
+        bench_dir = get_bench_dir()
+        site_dir = (
+            bench_dir / "sites" / site if site and bench_dir is not None else get_current_site()
+        )
         key = f"migrate:{site_dir}:{site or ''}"
         site_conf = site_dir / "grunt.site" if site_dir else None
         # Конфіг сайту — у ньому список встановлених додатків.
@@ -1793,9 +1887,19 @@ def update(
         if state.fresh(key, fp):
             console.print("  [green]✓[/green] Код не змінився з останньої міграції — пропущено")
         else:
-            migrated = _run_migrations(site)
-            if migrated:
-                state.mark(key, fp)
+            snapshot = _backup_before_migrate(site_name, backup)
+            if snapshot is False:
+                migrated = False  # no copy - no migration
+            else:
+                migrated = _run_migrations(site_name)
+                if migrated:
+                    state.mark(key, fp)
+                if isinstance(snapshot, str):
+                    on_site = f" --site {site_name}" if site_name else ""
+                    backup_note = (
+                        f"Копія бази перед міграцією: {snapshot} — відкат: "
+                        f"grunt db restore {snapshot}{on_site}"
+                    )
         updated_something = True
         console.print()
     else:
@@ -1837,9 +1941,11 @@ def update(
         console.print()
 
     # ── Фінал ───────────────────────────────────────────────────────
+    if backup_note:
+        console.print(f"[dim]{backup_note}[/dim]")
     if not updated_something:
         console.print("[yellow]Нічого не оновлено[/yellow]")
-    elif restarted:
+    elif restarted and migrated:
         console.print("[bold green]✅ Оновлення завершено[/bold green]")
         _print_cleanup_summary(removed, kept, notes)
         if state.skipped:

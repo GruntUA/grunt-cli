@@ -375,6 +375,7 @@ class TestUpdate:
         run.assert_not_called()
 
     @patch("grunt_cli.commands.update._restart_production", return_value=True)
+    @patch("grunt_cli.commands.update._backup_before_migrate", new=lambda *a: None)
     @patch("grunt_cli.commands.update._run_migrations", return_value=True)
     @patch("grunt_cli.commands.update._run_npm_install")
     @patch("grunt_cli.commands.update._update_python_packages")
@@ -393,6 +394,7 @@ class TestUpdate:
         assert "Директорію додатків не знайдено" in result.output
 
     @patch("grunt_cli.commands.update._restart_production", return_value=True)
+    @patch("grunt_cli.commands.update._backup_before_migrate", new=lambda *a: None)
     @patch("grunt_cli.commands.update._run_migrations", return_value=True)
     @patch("grunt_cli.commands.update._run_npm_install")
     @patch("grunt_cli.commands.update._update_python_packages")
@@ -418,6 +420,7 @@ class TestUpdate:
         assert order == ["runtimes", "deps grunt"]
 
     @patch("grunt_cli.commands.update._restart_production", return_value=True)
+    @patch("grunt_cli.commands.update._backup_before_migrate", new=lambda *a: None)
     @patch("grunt_cli.commands.update._run_migrations", return_value=True)
     @patch("grunt_cli.commands.update._run_npm_install")
     @patch("grunt_cli.commands.update._update_python_packages")
@@ -525,11 +528,16 @@ class TestUpdateRestart:
             patch("grunt_cli.commands.update._update_runtimes"),
             patch("grunt_cli.commands.update._get_cli_dir", return_value=None),
             patch("grunt_cli.commands.update._git_pull", return_value=True),
+            patch(
+                "grunt_cli.commands.update._backup_before_migrate",
+                return_value="20261118-000000",
+            ),
         ):
             return runner.invoke(cli, ["update", "--framework", "--no-deps", *args])
 
     @patch("grunt_cli.commands.update.restart_units", return_value=True)
     @patch("grunt_cli.commands.update.run_mise", return_value=True)
+    @patch("grunt_cli.commands.update._backup_before_migrate", new=lambda *a: None)
     @patch("grunt_cli.commands.update._run_migrations", return_value=True)
     def test_production_builds_and_restarts(
         self, _migrate, mock_mise, mock_restart, runner, tmp_path, monkeypatch
@@ -555,6 +563,26 @@ class TestUpdateRestart:
         mock_restart.assert_not_called()
 
     @patch("grunt_cli.commands.update.restart_units")
+    @patch("grunt_cli.commands.update._run_migrations", return_value=False)
+    def test_failed_migration_in_development_fails(
+        self, _migrate, _restart, runner, tmp_path, monkeypatch
+    ):
+        """Без сервісів перезапуск «вдається», але зірвана міграція — помилка."""
+        self._bench(tmp_path, monkeypatch, ())
+        result = self._run(runner)
+        assert result.exit_code != 0
+        assert "Оновлення завершено з помилками" in result.output
+
+    @patch("grunt_cli.commands.update.restart_units")
+    @patch("grunt_cli.commands.update._run_migrations", return_value=True)
+    def test_restore_hint_names_the_site(self, _migrate, _restart, runner, tmp_path, monkeypatch):
+        self._bench(tmp_path, monkeypatch, ())
+        result = self._run(runner, "--site", "other.site")
+        assert result.exit_code == 0, result.output
+        assert "20261118-000000 --site other.site" in " ".join(result.output.split())
+
+    @patch("grunt_cli.commands.update.restart_units")
+    @patch("grunt_cli.commands.update._backup_before_migrate", new=lambda *a: None)
     @patch("grunt_cli.commands.update._run_migrations", return_value=True)
     def test_development_does_not_restart(
         self, _migrate, mock_restart, runner, tmp_path, monkeypatch
@@ -566,6 +594,7 @@ class TestUpdateRestart:
         mock_restart.assert_not_called()
 
     @patch("grunt_cli.commands.update.restart_units")
+    @patch("grunt_cli.commands.update._backup_before_migrate", new=lambda *a: None)
     @patch("grunt_cli.commands.update._run_migrations", return_value=True)
     def test_no_restart_flag(self, _migrate, mock_restart, runner, tmp_path, monkeypatch):
         self._bench(tmp_path, monkeypatch, ("mlt_prod-web.service",))
@@ -575,6 +604,7 @@ class TestUpdateRestart:
 
     @patch("grunt_cli.commands.update.restart_units", return_value=True)
     @patch("grunt_cli.commands.update.run_mise", return_value=True)
+    @patch("grunt_cli.commands.update._backup_before_migrate", new=lambda *a: None)
     @patch("grunt_cli.commands.update._run_migrations", return_value=True)
     def test_unchanged_code_skips_migrate_and_restart(
         self, mock_migrate, _mise, mock_restart, runner, tmp_path, monkeypatch
@@ -1257,6 +1287,7 @@ class TestHintOutdated:
             ) as check,
             patch("grunt_cli.commands.update._update_python_packages") as packages,
             patch("grunt_cli.commands.update._run_npm_install") as npm,
+            patch("grunt_cli.commands.update._backup_before_migrate", return_value=None),
             patch("grunt_cli.commands.update._run_migrations", return_value=True),
             patch("grunt_cli.commands.update._get_cli_dir", return_value=None),
             patch("grunt_cli.commands.update._git_pull", return_value=True),
@@ -1509,6 +1540,7 @@ class TestCleanup:
     @patch("grunt_cli.commands.update._update_python_packages")
     @patch("grunt_cli.commands.update._run_npm_install")
     @patch("grunt_cli.commands.update._update_runtimes")
+    @patch("grunt_cli.commands.update._backup_before_migrate", new=lambda *a: None)
     @patch("grunt_cli.commands.update._run_migrations", return_value=True)
     @patch("grunt_cli.commands.update._get_cli_dir", return_value=None)
     @patch("grunt_cli.commands.update._find_apps_dir", return_value=None)
@@ -1690,3 +1722,73 @@ class TestUpgrade:
         mock_runtimes.assert_not_called()
         mock_node.assert_not_called()
         mock_py.assert_not_called()
+
+
+class TestBackupBeforeMigrate:
+    """Копія бази перед міграцією: без неї (коли просили) міграції немає."""
+
+    @staticmethod
+    def _bench(tmp_path, monkeypatch):
+        bench = tmp_path / "bench"
+        (bench / "apps" / "grunt").mkdir(parents=True)
+        monkeypatch.setattr("grunt_cli.commands.update.get_bench_dir", lambda: bench)
+        monkeypatch.setattr("grunt_cli.helpers.get_venv_grunt", lambda: ["grunt"])
+        monkeypatch.setattr("grunt_cli.helpers.get_dotenv_path", lambda: None)
+        monkeypatch.setattr("grunt_cli.helpers.get_current_site_name", lambda: "s1")
+
+    def test_not_wanted(self):
+        from grunt_cli.commands.update import _backup_before_migrate
+
+        with patch("grunt_cli.commands.update.subprocess.run") as run:
+            assert _backup_before_migrate(None, False) is None
+        run.assert_not_called()
+
+    def test_id_from_the_output(self, tmp_path, monkeypatch):
+        from grunt_cli.commands.update import _backup_before_migrate
+
+        self._bench(tmp_path, monkeypatch)
+        done = subprocess.CompletedProcess(
+            [], 0, stdout="database  /x/backups/20261118-073112-database.sqlite.zst\n"
+        )
+        with patch("grunt_cli.commands.update.subprocess.run", return_value=done) as run:
+            assert _backup_before_migrate("s1", True) == "20261118-073112"
+        cmd = run.call_args.args[0]
+        assert cmd[:4] == ["grunt", "db", "backup", "--no-files"] and cmd[-2:] == ["--site", "s1"]
+
+    def test_id_from_the_file_name_not_the_path(self, tmp_path, monkeypatch):
+        """Каталог сайту, схожий на id, не плутає розбір."""
+        from grunt_cli.commands.update import _backup_before_migrate
+
+        self._bench(tmp_path, monkeypatch)
+        out = (
+            "config    /s/20200101-000000-database/backups/20261118-073112-config.env.zst\n"
+            "database  /s/20200101-000000-database/backups/20261118-073112-database.sqlite.zst\n"
+        )
+        done = subprocess.CompletedProcess([], 0, stdout=out)
+        with patch("grunt_cli.commands.update.subprocess.run", return_value=done):
+            assert _backup_before_migrate("s1", True) == "20261118-073112"
+
+    def test_launch_error_stops_the_migration(self, tmp_path, monkeypatch):
+        from grunt_cli.commands.update import _backup_before_migrate
+
+        self._bench(tmp_path, monkeypatch)
+        with patch("grunt_cli.commands.update.subprocess.run", side_effect=PermissionError("x")):
+            assert _backup_before_migrate("s1", True) is False
+
+    def test_no_database_yet_does_not_block(self, tmp_path, monkeypatch):
+        """Сайт без бази (create --no-migrate): копіювати нічого, міграція йде."""
+        from grunt_cli.commands.update import _backup_before_migrate
+
+        self._bench(tmp_path, monkeypatch)
+        out = "FileNotFoundError: [Errno 2] No such file or directory: '/b/sites/s1/grunt.db'\n"
+        failed = subprocess.CompletedProcess([], 1, stdout=out)
+        with patch("grunt_cli.commands.update.subprocess.run", return_value=failed):
+            assert _backup_before_migrate("s1", True) is None
+
+    def test_failed_copy_stops_the_migration(self, tmp_path, monkeypatch):
+        from grunt_cli.commands.update import _backup_before_migrate
+
+        self._bench(tmp_path, monkeypatch)
+        failed = subprocess.CompletedProcess([], 1, stdout="disk full")
+        with patch("grunt_cli.commands.update.subprocess.run", return_value=failed):
+            assert _backup_before_migrate("s1", True) is False
