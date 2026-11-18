@@ -1792,3 +1792,39 @@ class TestBackupBeforeMigrate:
         failed = subprocess.CompletedProcess([], 1, stdout="disk full")
         with patch("grunt_cli.commands.update.subprocess.run", return_value=failed):
             assert _backup_before_migrate("s1", True) is False
+
+
+class TestUpgradeBackup:
+    """grunt upgrade: копія бази перед міграцією, як у grunt update."""
+
+    @staticmethod
+    def _run(runner, snapshot, migrated=True):
+        with (
+            patch("grunt_cli.commands.upgrade._upgrade_python_packages"),
+            patch("grunt_cli.commands.upgrade._upgrade_cli_itself"),
+            patch("grunt_cli.commands.upgrade._cleanup_runtimes", return_value=([], [], [])),
+            patch("grunt_cli.commands.upgrade.get_current_site_name", return_value="s1"),
+            patch(
+                "grunt_cli.commands.upgrade._backup_before_migrate", return_value=snapshot
+            ) as backup,
+            patch("grunt_cli.commands.upgrade._run_migrations", return_value=migrated) as migrate,
+        ):
+            result = runner.invoke(cli, ["upgrade", "python", "--backup"])
+        return result, backup, migrate
+
+    def test_copy_then_migrate(self, runner):
+        result, backup, migrate = self._run(runner, "20261118-000000")
+        assert result.exit_code == 0, result.output
+        backup.assert_called_once_with("s1", True)
+        migrate.assert_called_once_with("s1")
+        assert "20261118-000000 --site s1" in " ".join(result.output.split())
+
+    def test_failed_copy_stops_the_migration(self, runner):
+        result, _backup, migrate = self._run(runner, False)
+        assert result.exit_code != 0
+        migrate.assert_not_called()
+        assert "з помилками" in result.output
+
+    def test_failed_migration_fails(self, runner):
+        result, _backup, _migrate = self._run(runner, None, migrated=False)
+        assert result.exit_code != 0
