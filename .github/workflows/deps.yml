@@ -1,0 +1,20 @@
+# Weekly pull request into master: every package to its newest version and the
+# Node.js major in mise.toml - the steps live in the framework's workflow.
+name: Dependencies
+
+on:
+  schedule:
+    - cron: "0 4 * * 1" # Monday
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deps:
+    uses: GruntUA/Grunt/.github/workflows/deps.yml@develop
+    permissions:
+      contents: write
+      pull-requests: write
+    with:
+      base: master

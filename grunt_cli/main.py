@@ -18,7 +18,6 @@ from grunt_cli.commands.restart import restart
 from grunt_cli.commands.serve import serve
 from grunt_cli.commands.setup import setup
 from grunt_cli.commands.update import update
-from grunt_cli.commands.upgrade import upgrade
 from grunt_cli.helpers import FrameworkGroup
 
 
@@ -41,7 +40,6 @@ cli.add_command(setup)
 cli.add_command(auth)
 cli.add_command(app)
 cli.add_command(update)
-cli.add_command(upgrade)
 cli.add_command(master)
 
 
