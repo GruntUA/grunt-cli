@@ -137,20 +137,9 @@ grunt update apps         # apps + packages, npm, migrations
 For a private GitHub repository `grunt update` (like `grunt app get`) asks for a
 fine-grained token and stores it for that repository only.
 
----
-
-### `grunt upgrade`
-
-Upgrade all dependencies to their latest versions and update configuration files (`mise.toml`, `package.json`, `pyproject.toml`, lock files):
-
-```bash
-grunt upgrade                 # upgrade everything: mise, uv, Node.js, Python, rclone, packages
-grunt upgrade --dry-run       # preview updates without modifying files
-grunt upgrade runtimes        # only system runtimes (mise, uv, node, python, rclone)
-grunt upgrade packages        # only Python & Node.js packages and version files
-grunt upgrade python          # only Python and its packages
-grunt upgrade node            # only Node.js and npm packages
-```
+`grunt update` installs exactly the committed lock files and never changes versions.
+Newer packages, the Node.js major and the shadcn-vue components arrive with the
+weekly pull request of each repository's `.github/workflows/deps.yml`.
 
 ---
 
@@ -223,7 +212,7 @@ grunt lint [--app APP] [--fix] [--format json]
 ```
 
 The split: grunt-cli keeps what runs *around* a bench — creating it
-(`install`, `init`, `master`), updating it (`update`, `upgrade`), running it
+(`install`, `init`, `master`), updating it (`update`), running it
 (`serve`, `restart`, `setup production`), `auth` and `app get`. A command is
 implemented in exactly one place; add new site/DB/DocType commands to the
 framework, not here.

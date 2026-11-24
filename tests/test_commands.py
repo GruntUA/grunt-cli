@@ -1175,24 +1175,6 @@ class TestRuntimes:
         mock_run.assert_not_called()
 
 
-class TestLatestPython:
-    @patch("grunt_cli.commands.upgrade.find_uv", return_value="/usr/bin/uv")
-    @patch("grunt_cli.commands.upgrade._project_uv", return_value=None)
-    @patch("grunt_cli.commands.upgrade.subprocess.run")
-    def test_skips_prereleases(self, mock_run, _puv, _uv):
-        from grunt_cli.commands import upgrade
-
-        mock_run.return_value = MagicMock(
-            stdout=(
-                "cpython-3.16.0a1-linux-x86_64-gnu    <download available>\n"
-                "cpython-3.16.0a1+freethreaded-linux-x86_64-gnu    <download available>\n"
-                "cpython-3.15.2-linux-x86_64-gnu    <download available>\n"
-                "cpython-3.14.10-linux-x86_64-gnu    /usr/bin/python3.14\n"
-            )
-        )
-        assert upgrade._get_latest_python_version() == ("3.15.2", "3.15")
-
-
 class TestProjectUv:
     """uv для проєкту — з mise.toml фреймворку, навіть коли grunt update
     запущено з кореня бенча, де mise-шим uv не знає версії."""
@@ -1230,100 +1212,6 @@ class TestProjectUv:
         monkeypatch.setattr(update, "find_uv", lambda: "/shims/uv")
         monkeypatch.setattr(update.subprocess, "run", lambda cmd, **kw: result)
         assert update._project_uv() == "/shims/uv"
-
-
-class TestUpgradePackages:
-    @patch("grunt_cli.commands.update.find_uv", return_value="/usr/bin/uv")
-    @patch("grunt_cli.commands.update.subprocess.run", return_value=MagicMock(returncode=0))
-    def test_relocks_before_sync(self, mock_run, _uv, tmp_path, monkeypatch):
-        from grunt_cli.commands.update import _update_python_packages
-
-        (tmp_path / "apps" / "grunt").mkdir(parents=True)
-        (tmp_path / "apps" / "grunt" / "uv.lock").write_text("")
-        monkeypatch.setattr("grunt_cli.commands.update._find_apps_dir", lambda: tmp_path / "apps")
-
-        _update_python_packages(upgrade=True)
-
-        commands = [c.args[0][:3] for c in mock_run.call_args_list]
-        assert commands[:2] == [
-            ["/usr/bin/uv", "lock", "--upgrade"],
-            ["/usr/bin/uv", "sync", "--locked"],
-        ]
-
-    def test_refused_in_production(self, runner, tmp_path, monkeypatch):
-        bench = tmp_path / "prod"
-        (bench / "apps" / "grunt").mkdir(parents=True)
-        (bench / "sites").mkdir()
-        systemd = tmp_path / "systemd"
-        systemd.mkdir()
-        (systemd / "prod-web.service").write_text("")
-        monkeypatch.setattr("grunt_cli.commands.restart.SYSTEMD_DIR", systemd)
-        monkeypatch.chdir(bench)
-
-        result = runner.invoke(cli, ["upgrade"])
-
-        assert result.exit_code != 0
-        assert "лише в розробці" in result.output
-
-
-class TestHintOutdated:
-    """Розробка: grunt update лише показує новіші пакети — версії міняє grunt upgrade."""
-
-    @staticmethod
-    def _run(runner, tmp_path, monkeypatch, *args, outdated=None):
-        if outdated is None:
-            outdated = {"python": ["aiohttp 3.14.4 → 3.14.5"]}
-        bench = tmp_path / "dev"
-        (bench / "apps" / "grunt").mkdir(parents=True)
-        (bench / "sites").mkdir()
-        systemd = tmp_path / "systemd"
-        systemd.mkdir()
-        monkeypatch.setattr("grunt_cli.commands.restart.SYSTEMD_DIR", systemd)
-        monkeypatch.chdir(bench)
-        with (
-            patch(
-                "grunt_cli.commands.update._outdated_packages",
-                return_value=(outdated, ["vitest 4.1.11 → 5.0.4"]),
-            ) as check,
-            patch("grunt_cli.commands.update._update_python_packages") as packages,
-            patch("grunt_cli.commands.update._run_npm_install") as npm,
-            patch("grunt_cli.commands.update._backup_before_migrate", return_value=None),
-            patch("grunt_cli.commands.update._run_migrations", return_value=True),
-            patch("grunt_cli.commands.update._get_cli_dir", return_value=None),
-            patch("grunt_cli.commands.update._git_pull", return_value=True),
-        ):
-            result = runner.invoke(cli, ["update", "--framework", "--no-deps", *args])
-        result.check, result.npm = check, npm
-        return result, packages
-
-    def test_hints_without_upgrading(self, runner, tmp_path, monkeypatch):
-        result, packages = self._run(runner, tmp_path, monkeypatch)
-        assert result.exit_code == 0, result.output
-        assert "Python — фреймворк (uv.lock): новіші версії 1" in result.output
-        assert "Оновити: grunt upgrade (лише lock-файли: --in-range" in result.output
-        assert "(grunt upgrade)" in result.output  # мажорна vitest
-        packages.assert_called_once_with()
-        assert all(not c.kwargs.get("upgrade") for c in result.npm.call_args_list)
-
-    def test_nothing_outdated(self, runner, tmp_path, monkeypatch):
-        result, _ = self._run(runner, tmp_path, monkeypatch, outdated={})
-        assert result.exit_code == 0, result.output
-        assert "Оновити lock-файли" not in result.output
-
-    @pytest.mark.parametrize("flag", ["--skip-outdated", "--no-upgrade-packages"])
-    def test_opt_out(self, runner, tmp_path, monkeypatch, flag):
-        result, packages = self._run(runner, tmp_path, monkeypatch, flag)
-        assert result.exit_code == 0, result.output
-        result.check.assert_not_called()
-        packages.assert_called_once_with()
-
-    def test_deprecated_flag_runs_upgrade(self, runner, tmp_path, monkeypatch):
-        with patch("grunt_cli.commands.upgrade.upgrade.callback") as upgrade:
-            result, packages = self._run(runner, tmp_path, monkeypatch, "--upgrade-packages")
-        assert result.exit_code == 0, result.output
-        assert "застарів — це grunt upgrade --in-range" in result.output
-        assert upgrade.call_args.kwargs["in_range"] is True
-        packages.assert_not_called()
 
 
 class TestDepsFingerprint:
@@ -1558,7 +1446,7 @@ class TestCleanup:
     def test_summary_and_keep_old(
         self, cleanup, _apps, _cli, _migrate, _runtimes, _npm, _packages, runner
     ):
-        result = runner.invoke(cli, ["update", "--no-upgrade-packages"])
+        result = runner.invoke(cli, ["update"])
         assert result.exit_code == 0, result.output
         cleanup.assert_called_once()
         tail = result.output.split("Оновлення завершено", 1)[1]
@@ -1570,7 +1458,7 @@ class TestCleanup:
         assert "звільнити: uv tool install --reinstall deptry" in tail
 
         cleanup.reset_mock()
-        assert runner.invoke(cli, ["update", "--keep-old", "--no-upgrade-packages"]).exit_code == 0
+        assert runner.invoke(cli, ["update", "--keep-old"]).exit_code == 0
         cleanup.assert_not_called()
 
 
@@ -1607,121 +1495,6 @@ class TestQuietOutput:
         monkeypatch.setattr(helpers, "VERBOSE", True)
         assert helpers.run_captured([sys.executable, "-c", "print('Resolved 129')"]) == 0
         assert "Resolved 129" in capfd.readouterr().out
-
-
-class TestUpgrade:
-    def test_upgrade_help(self, runner):
-        from grunt_cli.main import cli
-
-        result = runner.invoke(cli, ["upgrade", "--help"])
-        assert result.exit_code == 0
-        assert "--dry-run" in result.output
-        assert "--skip-runtimes" in result.output
-        assert "--skip-packages" in result.output
-
-    def test_upgrade_flags_moved_out_of_update(self, runner):
-        from grunt_cli.main import cli
-
-        result = runner.invoke(cli, ["update", "--help"])
-        assert result.exit_code == 0
-        assert "--upgrade" not in result.output
-        assert "--in-range" in runner.invoke(cli, ["upgrade", "--help"]).output
-
-    def test_runtimes_not_in_range(self, runner):
-        from grunt_cli.main import cli
-
-        result = runner.invoke(cli, ["upgrade", "runtimes", "--in-range"])
-        assert result.exit_code != 0
-        assert "grunt update --deps" in result.output
-
-    def test_update_pyproject_deps(self, tmp_path):
-        from grunt_cli.commands.upgrade import _update_pyproject_deps
-
-        pyproject = tmp_path / "pyproject.toml"
-        pyproject.write_text(
-            "[project]\n"
-            "dependencies = [\n"
-            '    "fastapi>=0.111.0",\n'
-            '    "uvicorn[standard]>=0.29.0",  # server\n'
-            '    "click>=8.1.0",\n'
-            "]\n"
-        )
-
-        locked = {
-            "fastapi": "0.143.1",
-            "uvicorn": "0.54.0",
-            "click": "8.1.0",  # unchanged
-        }
-
-        changes = _update_pyproject_deps(pyproject, locked, dry_run=False)
-        assert len(changes) == 2
-        assert "fastapi: 0.111.0 → 0.143.1" in changes
-        assert "uvicorn: 0.29.0 → 0.54.0" in changes
-
-        new_text = pyproject.read_text()
-        assert '"fastapi>=0.143.1",' in new_text
-        assert '"uvicorn[standard]>=0.54.0",  # server' in new_text
-        assert '"click>=8.1.0",' in new_text
-
-    def test_update_mise_toml(self, tmp_path):
-        from grunt_cli.commands.upgrade import _update_mise_toml
-
-        mise_file = tmp_path / "mise.toml"
-        mise_file.write_text('[tools]\nnode = "24"\npython = "3.14"\nuv = "latest"\n')
-
-        changes = _update_mise_toml(mise_file, node_ver="26", python_ver="3.15", dry_run=False)
-        assert len(changes) == 2
-        assert "node: 24 → 26" in changes
-        assert "python: 3.14 → 3.15" in changes
-
-        new_text = mise_file.read_text()
-        assert 'node = "26"' in new_text
-        assert 'python = "3.15"' in new_text
-        assert 'uv = "latest"' in new_text
-
-    @patch("grunt_cli.commands.upgrade._cleanup_runtimes", return_value=([], [], []))
-    @patch("grunt_cli.commands.upgrade._run_migrations", return_value=True)
-    @patch("grunt_cli.commands.upgrade._npm_audit")
-    @patch("grunt_cli.commands.upgrade._upgrade_in_range")
-    @patch("grunt_cli.commands.upgrade._upgrade_cli_itself")
-    @patch("grunt_cli.commands.upgrade._upgrade_python_packages")
-    @patch("grunt_cli.commands.upgrade._upgrade_node_packages")
-    @patch("grunt_cli.commands.upgrade._upgrade_runtimes")
-    def test_upgrade_dry_run_invokes_steps(
-        self,
-        mock_runtimes,
-        mock_node,
-        mock_py,
-        mock_cli,
-        mock_range,
-        mock_audit,
-        _migrate,
-        _cleanup,
-        runner,
-    ):
-        from grunt_cli.main import cli
-
-        # За замовчуванням — найновіші версії, з рантаймами
-        result = runner.invoke(cli, ["upgrade", "--dry-run"])
-        assert result.exit_code == 0, result.output
-        assert "Grunt Upgrade" in result.output
-        mock_runtimes.assert_called_once_with(dry_run=True)
-        mock_node.assert_called_once_with(dry_run=True)
-        mock_py.assert_called_once_with(dry_run=True)
-        mock_audit.assert_called_once_with(dry_run=True)
-        mock_cli.assert_called_once_with(dry_run=True, latest=True)
-        mock_range.assert_not_called()
-
-        # --in-range — лише lock-файли в межах діапазонів
-        for mock in (mock_runtimes, mock_node, mock_py, mock_cli):
-            mock.reset_mock()
-        result = runner.invoke(cli, ["upgrade", "--in-range", "--dry-run"])
-        assert result.exit_code == 0, result.output
-        mock_range.assert_called_once_with(python=True, node=True, dry_run=True)
-        mock_cli.assert_called_once_with(dry_run=True, latest=False)
-        mock_runtimes.assert_not_called()
-        mock_node.assert_not_called()
-        mock_py.assert_not_called()
 
 
 class TestBackupBeforeMigrate:
@@ -1792,39 +1565,3 @@ class TestBackupBeforeMigrate:
         failed = subprocess.CompletedProcess([], 1, stdout="disk full")
         with patch("grunt_cli.commands.update.subprocess.run", return_value=failed):
             assert _backup_before_migrate("s1", True) is False
-
-
-class TestUpgradeBackup:
-    """grunt upgrade: копія бази перед міграцією, як у grunt update."""
-
-    @staticmethod
-    def _run(runner, snapshot, migrated=True):
-        with (
-            patch("grunt_cli.commands.upgrade._upgrade_python_packages"),
-            patch("grunt_cli.commands.upgrade._upgrade_cli_itself"),
-            patch("grunt_cli.commands.upgrade._cleanup_runtimes", return_value=([], [], [])),
-            patch("grunt_cli.commands.upgrade.get_current_site_name", return_value="s1"),
-            patch(
-                "grunt_cli.commands.upgrade._backup_before_migrate", return_value=snapshot
-            ) as backup,
-            patch("grunt_cli.commands.upgrade._run_migrations", return_value=migrated) as migrate,
-        ):
-            result = runner.invoke(cli, ["upgrade", "python", "--backup"])
-        return result, backup, migrate
-
-    def test_copy_then_migrate(self, runner):
-        result, backup, migrate = self._run(runner, "20261118-000000")
-        assert result.exit_code == 0, result.output
-        backup.assert_called_once_with("s1", True)
-        migrate.assert_called_once_with("s1")
-        assert "20261118-000000 --site s1" in " ".join(result.output.split())
-
-    def test_failed_copy_stops_the_migration(self, runner):
-        result, _backup, migrate = self._run(runner, False)
-        assert result.exit_code != 0
-        migrate.assert_not_called()
-        assert "з помилками" in result.output
-
-    def test_failed_migration_fails(self, runner):
-        result, _backup, _migrate = self._run(runner, None, migrated=False)
-        assert result.exit_code != 0
